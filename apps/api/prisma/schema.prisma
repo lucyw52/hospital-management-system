@@ -1,0 +1,320 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  RECEPTIONIST
+  DOCTOR
+  LAB_TECH
+  PHARMACIST
+  WARD_CLERK
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum VisitType {
+  CONSULTATION
+  INJECTION_FOLLOWUP
+  REVIEW
+}
+
+enum VisitStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum InvoiceType {
+  CONSULTATION
+  PHARMACY
+  WARD
+  LAB
+}
+
+enum InvoiceStatus {
+  PENDING
+  PAID
+  CANCELLED
+}
+
+enum PaymentMethod {
+  MPESA
+  CASH
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum QueueStage {
+  RECEPTION
+  DOCTOR
+  LAB
+  PHARMACY
+  WARD
+}
+
+enum QueueStatus {
+  WAITING
+  IN_PROGRESS
+  DONE
+}
+
+enum LabOrderStatus {
+  ORDERED
+  SAMPLE_TAKEN
+  RESULTS_READY
+}
+
+enum PrescriptionStatus {
+  PENDING
+  DISPENSED
+}
+
+enum AdmissionStatus {
+  ADMITTED
+  DISCHARGED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  phone        String   @unique
+  role         UserRole
+  passwordHash String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  visitsCreated  Visit[]         @relation("VisitCreator")
+  consultations  Consultation[]
+  labOrders      LabOrder[]
+  prescriptions  Prescription[]
+
+  @@map("users")
+}
+
+model Patient {
+  id             String   @id @default(cuid())
+  name           String
+  phone          String
+  dob            DateTime?
+  gender         Gender?
+  idNumber       String?  @unique
+  address        String?
+  nextOfKinName  String?
+  nextOfKinPhone String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  visits Visit[]
+
+  @@index([phone])
+  @@index([idNumber])
+  @@map("patients")
+}
+
+model Visit {
+  id              String      @id @default(cuid())
+  patientId       String
+  visitType       VisitType
+  status          VisitStatus @default(OPEN)
+  createdByUserId String
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  patient       Patient        @relation(fields: [patientId], references: [id])
+  createdBy     User           @relation("VisitCreator", fields: [createdByUserId], references: [id])
+  invoices      Invoice[]
+  queueItems    QueueItem[]
+  consultations Consultation[]
+  labOrders     LabOrder[]
+  prescriptions Prescription[]
+  admissions    Admission[]
+
+  @@index([patientId])
+  @@index([createdByUserId])
+  @@index([status])
+  @@map("visits")
+}
+
+model Invoice {
+  id        String        @id @default(cuid())
+  visitId   String
+  type      InvoiceType
+  amount    Float
+  status    InvoiceStatus @default(PENDING)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  // Relations
+  visit    Visit     @relation(fields: [visitId], references: [id])
+  payments Payment[]
+
+  @@index([visitId])
+  @@index([status])
+  @@map("invoices")
+}
+
+model Payment {
+  id                      String        @id @default(cuid())
+  invoiceId               String
+  method                  PaymentMethod
+  status                  PaymentStatus @default(PENDING)
+  mpesaCheckoutRequestId  String?       @unique
+  mpesaReceipt            String?
+  rawCallbackJson         String?       @db.Text
+  amount                  Float
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+
+  // Relations
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  @@index([invoiceId])
+  @@index([status])
+  @@index([mpesaCheckoutRequestId])
+  @@map("payments")
+}
+
+model QueueItem {
+  id        String      @id @default(cuid())
+  visitId   String
+  stage     QueueStage
+  status    QueueStatus @default(WAITING)
+  priority  Int         @default(0)
+  notes     String?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  // Relations
+  visit Visit @relation(fields: [visitId], references: [id])
+
+  @@index([visitId])
+  @@index([stage, status])
+  @@map("queue_items")
+}
+
+model Consultation {
+  id        String   @id @default(cuid())
+  visitId   String
+  doctorId  String
+  notes     String?  @db.Text
+  diagnosis String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  visit  Visit @relation(fields: [visitId], references: [id])
+  doctor User  @relation(fields: [doctorId], references: [id])
+
+  @@index([visitId])
+  @@index([doctorId])
+  @@map("consultations")
+}
+
+model LabOrder {
+  id        String         @id @default(cuid())
+  visitId   String
+  doctorId  String
+  testsJson String         @db.Text // JSON array of test names/types
+  status    LabOrderStatus @default(ORDERED)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  // Relations
+  visit      Visit       @relation(fields: [visitId], references: [id])
+  doctor     User        @relation(fields: [doctorId], references: [id])
+  labResults LabResult[]
+
+  @@index([visitId])
+  @@index([doctorId])
+  @@index([status])
+  @@map("lab_orders")
+}
+
+model LabResult {
+  id            String   @id @default(cuid())
+  labOrderId    String
+  resultsJson   String   @db.Text // JSON object with test results
+  attachmentUrl String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  labOrder LabOrder @relation(fields: [labOrderId], references: [id])
+
+  @@index([labOrderId])
+  @@map("lab_results")
+}
+
+model Prescription {
+  id        String             @id @default(cuid())
+  visitId   String
+  doctorId  String
+  itemsJson String             @db.Text // JSON array of {medicine, dosage, quantity}
+  status    PrescriptionStatus @default(PENDING)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  // Relations
+  visit  Visit @relation(fields: [visitId], references: [id])
+  doctor User  @relation(fields: [doctorId], references: [id])
+
+  @@index([visitId])
+  @@index([doctorId])
+  @@index([status])
+  @@map("prescriptions")
+}
+
+model Admission {
+  id           String          @id @default(cuid())
+  visitId      String
+  wardName     String
+  bedNumber    String
+  status       AdmissionStatus @default(ADMITTED)
+  admittedAt   DateTime        @default(now())
+  dischargedAt DateTime?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  // Relations
+  visit Visit @relation(fields: [visitId], references: [id])
+
+  @@index([visitId])
+  @@index([status])
+  @@map("admissions")
+}
+
+// Additional table for stock management (optional but useful)
+model MedicineStock {
+  id           String   @id @default(cuid())
+  name         String   @unique
+  quantity     Int
+  reorderLevel Int
+  price        Float
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("medicine_stock")
+}

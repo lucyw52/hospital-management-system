@@ -1,0 +1,27 @@
+{
+  "name": "hospital-management-system",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "cd apps/api && npm run start:dev",
+    "dev:web": "cd apps/web && npm run dev",
+    "dev": "concurrently \"npm run dev:api\" \"npm run dev:web\"",
+    "build:api": "cd apps/api && npm run build",
+    "build:web": "cd apps/web && npm run build",
+    "build": "npm run build:api && npm run build:web",
+    "migrate:dev": "cd apps/api && npx prisma migrate dev",
+    "migrate:deploy": "cd apps/api && npx prisma migrate deploy",
+    "seed": "cd apps/api && npm run seed",
+    "studio": "cd apps/api && npx prisma studio",
+    "test:api": "cd apps/api && npm run test",
+    "test:e2e": "cd apps/api && npm run test:e2e"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "typescript": "^5.3.3"
+  }
+}
