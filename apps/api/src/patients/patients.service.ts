@@ -33,6 +33,20 @@ export class PatientsService {
     });
   }
 
+  async search(query: string) {
+    return this.prisma.patient.findMany({
+      where: {
+        OR: [
+          { name: { contains: query, mode: 'insensitive' as any } },
+          { phone: { contains: query } },
+          { idNumber: { contains: query } },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+    });
+  }
+
   async findOne(id: string) {
     return this.prisma.patient.findUnique({
       where: { id },

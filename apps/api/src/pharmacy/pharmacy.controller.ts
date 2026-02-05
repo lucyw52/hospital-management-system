@@ -1,6 +1,6 @@
-import { Controller, Get, Post, Body, Param, Patch, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Patch, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { JwtAuthGuard } from '@nestjs/passport';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PharmacyService } from './pharmacy.service';
 import { CreatePrescriptionDto } from './dto/create-prescription.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -20,6 +20,20 @@ export class PharmacyController {
   @ApiOperation({ summary: 'Create prescription' })
   createPrescription(@Body() createPrescriptionDto: CreatePrescriptionDto, @CurrentUser() user: any) {
     return this.pharmacyService.createPrescription(createPrescriptionDto, user.id);
+  }
+
+  @Get('prescriptions')
+  @Roles(UserRole.PHARMACIST, UserRole.ADMIN)
+  @ApiOperation({ summary: 'Get all prescriptions' })
+  getPrescriptions(@Query('status') status?: string) {
+    return this.pharmacyService.getPrescriptions(status);
+  }
+
+  @Patch('prescriptions/:id')
+  @Roles(UserRole.PHARMACIST)
+  @ApiOperation({ summary: 'Update prescription' })
+  updatePrescription(@Param('id') id: string, @Body() updateData: any) {
+    return this.pharmacyService.updatePrescription(id, updateData);
   }
 
   @Get('queue')

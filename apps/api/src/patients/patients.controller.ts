@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Body, Patch, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
-import { JwtAuthGuard } from '@nestjs/passport';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PatientsService } from './patients.service';
 import { CreatePatientDto } from './dto/create-patient.dto';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -21,8 +21,15 @@ export class PatientsController {
     return this.patientsService.create(createPatientDto);
   }
 
+  @Get('search')
+  @ApiOperation({ summary: 'Search patients by phone, ID, or name' })
+  @ApiQuery({ name: 'q', required: true })
+  search(@Query('q') query: string) {
+    return this.patientsService.search(query);
+  }
+
   @Get()
-  @ApiOperation({ summary: 'Search patients' })
+  @ApiOperation({ summary: 'Get all patients' })
   @ApiQuery({ name: 'search', required: false })
   findAll(@Query('search') search?: string) {
     return this.patientsService.findAll(search);

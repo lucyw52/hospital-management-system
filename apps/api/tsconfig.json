@@ -20,5 +20,7 @@
     "paths": {
       "@/*": ["src/*"]
     }
-  }
+  },
+  "include": ["src/**/*", "prisma/**/*", "scripts/**/*"],
+  "exclude": ["node_modules", "dist", "test", "**/*.spec.ts"]
 }

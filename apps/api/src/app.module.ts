@@ -13,6 +13,7 @@ import { LabModule } from './lab/lab.module';
 import { PharmacyModule } from './pharmacy/pharmacy.module';
 import { AdmissionsModule } from './admissions/admissions.module';
 import { WebsocketModule } from './websocket/websocket.module';
+import { EmailModule } from './email/email.module';
 
 @Module({
   imports: [
@@ -20,17 +21,18 @@ import { WebsocketModule } from './websocket/websocket.module';
       isGlobal: true,
     }),
     PrismaModule,
+    EmailModule,
     AuthModule,
     UsersModule,
     PatientsModule,
     VisitsModule,
-    InvoicesModule,
     PaymentsModule,
     QueueModule,
     ConsultationsModule,
     LabModule,
     PharmacyModule,
     AdmissionsModule,
+    InvoicesModule,
     WebsocketModule,
   ],
 })

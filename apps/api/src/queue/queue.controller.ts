@@ -1,6 +1,6 @@
 import { Controller, Get, Param, Patch, Body, Post, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { JwtAuthGuard } from '@nestjs/passport';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { QueueService } from './queue.service';
 import { QueueStage, QueueStatus } from '@prisma/client';
 
@@ -10,6 +10,12 @@ import { QueueStage, QueueStatus } from '@prisma/client';
 @Controller('queue')
 export class QueueController {
   constructor(private readonly queueService: QueueService) {}
+
+  @Get()
+  @ApiOperation({ summary: 'Get all queue items' })
+  getAllQueue() {
+    return this.queueService.getAllQueue();
+  }
 
   @Get(':stage')
   @ApiOperation({ summary: 'Get queue by stage' })

@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Body, Param, Patch, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { JwtAuthGuard } from '@nestjs/passport';
+import { AuthGuard } from '@nestjs/passport';
 import { ConsultationsService } from './consultations.service';
 import { CreateConsultationDto } from './dto/create-consultation.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -10,7 +10,7 @@ import { UserRole } from '@prisma/client';
 
 @ApiTags('Consultations')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(AuthGuard('jwt'), RolesGuard)
 @Controller('consultations')
 export class ConsultationsController {
   constructor(private readonly consultationsService: ConsultationsService) {}

@@ -85,6 +85,33 @@ export class PharmacyService {
     });
   }
 
+  async getPrescriptions(status?: string) {
+    return this.prisma.prescription.findMany({
+      where: status ? { status: status as any } : {},
+      include: {
+        visit: {
+          include: {
+            patient: true,
+          },
+        },
+        doctor: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async updatePrescription(id: string, updateData: any) {
+    return this.prisma.prescription.update({
+      where: { id },
+      data: updateData,
+    });
+  }
+
   async dispensePrescription(id: string) {
     return this.prisma.prescription.update({
       where: { id },

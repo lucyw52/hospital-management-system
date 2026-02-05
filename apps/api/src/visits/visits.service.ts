@@ -1,11 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { EmailService } from '../email/email.service';
 import { CreateVisitDto } from './dto/create-visit.dto';
 import { VisitType, InvoiceType, QueueStage } from '@prisma/client';
 
 @Injectable()
 export class VisitsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private emailService: EmailService,
+  ) {}
 
   async create(createVisitDto: CreateVisitDto, userId: string) {
     // Create visit
@@ -21,47 +25,29 @@ export class VisitsService {
       },
     });
 
-    // Workflow logic based on visit type
-    if (createVisitDto.visitType === VisitType.CONSULTATION) {
-      // Create consultation invoice
-      await this.prisma.invoice.create({
-        data: {
-          visitId: visit.id,
-          type: InvoiceType.CONSULTATION,
-          amount: 1500, // KES 1,500 consultation fee
-          status: 'PENDING',
-        },
-      });
+    // Get patient email if available (you may need to add email field to Patient model)
+    const patientEmail = (visit.patient as any).email || `patient${visit.patient.id}@example.com`;
 
-      // Create queue item at RECEPTION stage (waiting for payment)
-      await this.prisma.queueItem.create({
-        data: {
-          visitId: visit.id,
-          stage: QueueStage.RECEPTION,
-          status: 'WAITING',
-          notes: 'Waiting for consultation payment',
-        },
-      });
-    } else if (createVisitDto.visitType === VisitType.INJECTION_FOLLOWUP) {
-      // No payment required, directly enqueue to DOCTOR
-      await this.prisma.queueItem.create({
-        data: {
-          visitId: visit.id,
-          stage: QueueStage.DOCTOR,
-          status: 'WAITING',
-          notes: 'Injection follow-up - no payment required',
-        },
-      });
-    } else if (createVisitDto.visitType === VisitType.REVIEW) {
-      // Review visits go directly to doctor
-      await this.prisma.queueItem.create({
-        data: {
-          visitId: visit.id,
-          stage: QueueStage.DOCTOR,
-          status: 'WAITING',
-          notes: 'Review visit',
-        },
-      });
+    // For testing: Auto-queue to DOCTOR for all visit types (skip payment)
+    const queueItem = await this.prisma.queueItem.create({
+      data: {
+        visitId: visit.id,
+        stage: QueueStage.DOCTOR,
+        status: 'WAITING',
+        notes: `${createVisitDto.visitType} visit - queued for doctor`,
+      },
+    });
+
+    // Send queue notification email
+    try {
+      await this.emailService.sendQueueNotification(
+        patientEmail,
+        visit.patient.name,
+        1, // Queue number (you can calculate actual position)
+        'DOCTOR',
+      );
+    } catch (error) {
+      console.error('Failed to send queue notification:', error);
     }
 
     return visit;

@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Body, Param, Patch, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { JwtAuthGuard } from '@nestjs/passport';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { LabService } from './lab.service';
 import { CreateLabOrderDto, CreateLabResultDto } from './dto/create-lab-order.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';

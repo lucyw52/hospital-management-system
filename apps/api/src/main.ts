@@ -4,16 +4,18 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  try {
+    const app = await NestFactory.create(AppModule);
+    console.log('✅ AppModule created successfully');
 
-  // Enable CORS
-  app.enableCors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-    credentials: true,
-  });
+    // Enable CORS
+    app.enableCors({
+      origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+      credentials: true,
+    });
 
-  // Global validation pipe
-  app.useGlobalPipes(
+    // Global validation pipe
+    app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
       forbidNonWhitelisted: true,
@@ -39,6 +41,11 @@ async function bootstrap() {
 
   console.log(`🚀 Application is running on: http://localhost:${port}`);
   console.log(`📚 Swagger docs available at: http://localhost:${port}/api/docs`);
+  } catch (error) {
+    console.error('❌ Application startup failed:');
+    console.error(error);
+    process.exit(1);
+  }
 }
 
 bootstrap();

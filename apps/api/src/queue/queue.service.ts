@@ -6,6 +6,32 @@ import { QueueStage, QueueStatus } from '@prisma/client';
 export class QueueService {
   constructor(private prisma: PrismaService) {}
 
+  async getAllQueue() {
+    return this.prisma.queueItem.findMany({
+      where: {
+        status: {
+          in: ['WAITING', 'IN_PROGRESS'],
+        },
+      },
+      include: {
+        visit: {
+          include: {
+            patient: true,
+            invoices: {
+              include: {
+                payments: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: [
+        { priority: 'desc' },
+        { createdAt: 'asc' },
+      ],
+    });
+  }
+
   async getQueueByStage(stage: QueueStage) {
     return this.prisma.queueItem.findMany({
       where: {
