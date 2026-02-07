@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/Layout/DashboardLayout';
 import { Card, Badge, Button } from '@/components/UI/Card';
 import { apiClient } from '@/lib/api-client';
+import { useAuthStore } from '@/store/auth-store';
 import toast from 'react-hot-toast';
 
 interface QueueItem {
@@ -65,10 +66,21 @@ export default function DoctorPage() {
 
   const fetchQueue = async () => {
     try {
-      const response = await apiClient.get('/queue?stage=DOCTOR&status=WAITING');
+      const response = await apiClient.get('/queue/DOCTOR');
       setQueue(response.data);
     } catch (error) {
       console.error('Failed to fetch queue:', error);
+    }
+  };
+
+  const handleJumpQueue = async (queueId: string) => {
+    try {
+      await apiClient.patch(`/queue/${queueId}/jump`);
+      toast.success('✅ Patient moved to front of queue');
+      fetchQueue();
+    } catch (error) {
+      console.error('Failed to jump queue:', error);
+      toast.error('❌ Failed to jump queue');
     }
   };
 
@@ -98,7 +110,7 @@ export default function DoctorPage() {
       }
 
       // Mark queue item as done
-      await apiClient.patch(`/queue/${selectedPatient.id}`, { status: 'DONE' });
+      await apiClient.patch(`/queue/${selectedPatient.id}/status`, { status: 'DONE' });
 
       setShowConsultationForm(false);
       setSelectedPatient(null);
@@ -172,12 +184,14 @@ export default function DoctorPage() {
     });
   };
 
+  const user = useAuthStore((state) => state.user);
+
   return (
-    <DashboardLayout navItems={navItems} userName="Dr. Smith" userRole="Doctor">
+    <DashboardLayout navItems={navItems} userName={user?.name || 'Doctor'} userRole="Doctor">
       <div className="space-y-6">
         {/* Header */}
         <div>
-          <h1 className="text-3xl font-bold text-blue-600">Welcome, Doctor</h1>
+          <h1 className="text-3xl font-bold text-blue-600">Welcome, {user?.name || 'Doctor'}</h1>
           <p className="text-gray-600 mt-1">Consultation workspace and patient care</p>
         </div>
 
@@ -276,16 +290,29 @@ export default function DoctorPage() {
                         </Badge>
                       </td>
                       <td className="py-3 px-4">
-                        {item.priority > 1 ? (
-                          <Badge variant="danger">High</Badge>
+                        {item.priority > 50 ? (
+                          <Badge variant="danger">🔴 Lab Return</Badge>
+                        ) : item.priority > 1 ? (
+                          <Badge variant="warning">High</Badge>
                         ) : (
                           <Badge variant="info">Normal</Badge>
                         )}
                       </td>
                       <td className="py-3 px-4">
-                        <Button size="sm" onClick={() => handleStartConsultation(item)}>
-                          Start Consultation
-                        </Button>
+                        <div className="flex gap-2">
+                          <Button size="sm" onClick={() => handleStartConsultation(item)}>
+                            {item.priority > 50 ? '📋 Review Results' : 'Start'}
+                          </Button>
+                          {item.status === 'WAITING' && (
+                            <Button 
+                              size="sm" 
+                              variant="primary"
+                              onClick={() => handleJumpQueue(item.id)}
+                            >
+                              ⬆️
+                            </Button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))

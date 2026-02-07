@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/Layout/DashboardLayout';
 import { Card, Badge, Button } from '@/components/UI/Card';
 import { apiClient } from '@/lib/api-client';
+import { useAuthStore } from '@/store/auth-store';
 import toast from 'react-hot-toast';
 
 interface User {
@@ -26,22 +27,6 @@ const navItems = [
 export default function AdminPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showAddUserModal, setShowAddUserModal] = useState(false);
-  const [formData, setFormData] = useState({
-    name: '',
-    email: '',
-    phone: '',
-    role: 'RECEPTIONIST',
-    password: '',
-  });
-
-  const roles = [
-    { value: 'RECEPTIONIST', label: 'Receptionist' },
-    { value: 'DOCTOR', label: 'Doctor' },
-    { value: 'LAB_TECH', label: 'Lab Technician' },
-    { value: 'PHARMACIST', label: 'Pharmacist' },
-    { value: 'WARD_CLERK', label: 'Ward Clerk' },
-  ];
 
   useEffect(() => {
     fetchUsers();
@@ -55,20 +40,6 @@ export default function AdminPage() {
       console.error('Failed to fetch users:', error);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleCreateUser = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      await apiClient.post('/users', formData);
-      setShowAddUserModal(false);
-      setFormData({ name: '', email: '', phone: '', role: 'RECEPTIONIST', password: '' });
-      fetchUsers();
-      toast.success('✅ Staff member created successfully!');
-    } catch (error) {
-      console.error('Failed to create user:', error);
-      toast.error('❌ Failed to create user');
     }
   };
 
@@ -93,12 +64,14 @@ export default function AdminPage() {
     return variants[role] || 'info';
   };
 
+  const user = useAuthStore((state) => state.user);
+
   return (
-    <DashboardLayout navItems={navItems} userName="Admin" userRole="Administrator">
+    <DashboardLayout navItems={navItems} userName={user?.name || 'Admin'} userRole="Administrator">
       <div className="space-y-6">
         {/* Header */}
         <div>
-          <h1 className="text-3xl font-bold text-blue-600">Welcome, Admin</h1>
+          <h1 className="text-3xl font-bold text-blue-600">Welcome, {user?.name || 'Admin'}</h1>
           <p className="text-gray-600 mt-1">Manage hospital staff and system settings</p>
         </div>
 
@@ -160,14 +133,7 @@ export default function AdminPage() {
         </div>
 
         {/* Staff Management */}
-        <Card
-          title="Hospital Staff Management"
-          action={
-            <Button onClick={() => setShowAddUserModal(true)}>
-              + Add Staff Member
-            </Button>
-          }
-        >
+        <Card title="Hospital Staff Management">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -233,90 +199,6 @@ export default function AdminPage() {
           </div>
         </Card>
       </div>
-
-      {/* Add User Modal */}
-      {showAddUserModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h2 className="text-xl font-bold text-gray-900 mb-4">Add New Staff Member</h2>
-            <form onSubmit={handleCreateUser} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
-                <input
-                  type="text"
-                  required
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                <input
-                  type="email"
-                  required
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
-                <input
-                  type="tel"
-                  required
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
-                <select
-                  required
-                  value={formData.role}
-                  onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  {roles.map((role) => (
-                    <option key={role.value} value={role.value}>
-                      {role.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-                <input
-                  type="password"
-                  required
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div className="flex gap-2 pt-4">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => setShowAddUserModal(false)}
-                  className="flex-1"
-                >
-                  Cancel
-                </Button>
-                <Button type="submit" className="flex-1">
-                  Create Staff Account
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </DashboardLayout>
   );
 }

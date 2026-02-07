@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/Layout/DashboardLayout';
 import { Card, Badge, Button } from '@/components/UI/Card';
 import { apiClient } from '@/lib/api-client';
+import { useAuthStore } from '@/store/auth-store';
 import toast from 'react-hot-toast';
 
 interface User {
@@ -164,8 +165,10 @@ export default function StaffManagementPage() {
     return matchesSearch && matchesRole && matchesStatus;
   });
 
+  const user = useAuthStore((state) => state.user);
+
   return (
-    <DashboardLayout navItems={navItems} userName="Admin" userRole="Administrator">
+    <DashboardLayout navItems={navItems} userName={user?.name || 'Admin'} userRole="Administrator">
       <div className="space-y-4 md:space-y-6 px-2 md:px-0">
         {/* Header */}
         <div>

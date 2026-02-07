@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/Layout/DashboardLayout';
 import { Card, Badge, Button } from '@/components/UI/Card';
 import { apiClient } from '@/lib/api-client';
+import { useAuthStore } from '@/store/auth-store';
 import toast from 'react-hot-toast';
 
 interface Patient {
@@ -125,7 +126,7 @@ export default function ReceptionistPage() {
       
       setShowCreateVisit(false);
       fetchQueue();
-      toast.success('✅ Visit created! Patient queued to doctor. Email notification sent.');
+      toast.success('✅ Visit created! Patient queued to doctor directly (Testing: No payment required).');
     } catch (error) {
       console.error('Failed to create visit:', error);
       toast.error('❌ Failed to create visit');
@@ -144,13 +145,28 @@ export default function ReceptionistPage() {
     }
   };
 
+  const user = useAuthStore((state) => state.user);
+
   return (
-    <DashboardLayout navItems={navItems} userName="Receptionist" userRole="Reception">
+    <DashboardLayout navItems={navItems} userName={user?.name || 'Receptionist'} userRole="Reception">
       <div className="space-y-6">
         {/* Header */}
         <div>
-          <h1 className="text-3xl font-bold text-blue-600">Welcome, Receptionist</h1>
+          <h1 className="text-3xl font-bold text-blue-600">Welcome, {user?.name || 'Receptionist'}</h1>
           <p className="text-gray-600 mt-1">Patient registration and queue management</p>
+        </div>
+
+        {/* Testing Mode Banner */}
+        <div className="p-4 bg-yellow-50 border-l-4 border-yellow-400 rounded-lg">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">⚠️</span>
+            <div>
+              <p className="font-semibold text-yellow-800">Testing Mode: Payments Disabled</p>
+              <p className="text-sm text-yellow-700">
+                All patients are queued directly to doctor without payment. Follow-up injection visits get priority.
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* Quick Actions */}

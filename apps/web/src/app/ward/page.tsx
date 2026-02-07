@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/Layout/DashboardLayout';
 import { Card, Badge, Button } from '@/components/UI/Card';
 import { apiClient } from '@/lib/api-client';
+import { useAuthStore } from '@/store/auth-store';
 import toast from 'react-hot-toast';
 
 interface Admission {
@@ -77,7 +78,7 @@ export default function WardClerkPage() {
 
   const fetchCurrentInpatients = async () => {
     try {
-      const response = await apiClient.get('/admissions?status=ADMITTED');
+      const response = await apiClient.get('/admissions/active');
       setCurrentInpatients(response.data);
     } catch (error) {
       console.error('Failed to fetch inpatients:', error);
@@ -112,30 +113,10 @@ export default function WardClerkPage() {
     if (!selectedPatient) return;
 
     try {
-      // Process payment first
-      if (dischargeForm.paymentMethod === 'MPESA') {
-        await apiClient.post('/payments/initiate', {
-          visitId: selectedPatient.visit.id,
-          phoneNumber: dischargeForm.mpesaPhone,
-          type: 'WARD',
-        });
-        alert('M-Pesa payment request sent. Patient will be discharged upon payment confirmation.');
-      } else {
-        await apiClient.post('/payments', {
-          visitId: selectedPatient.visit.id,
-          method: 'CASH',
-          type: 'WARD',
-        });
+      // For testing: Discharge directly without payment check
+      await apiClient.patch(`/admissions/${selectedPatient.id}/discharge`);
 
-        // Discharge patient
-        await apiClient.patch(`/admissions/${selectedPatient.id}`, {
-          status: 'DISCHARGED',
-          dischargedAt: new Date().toISOString(),
-        });
-
-        alert('Payment recorded and patient discharged successfully!');
-      }
-
+      toast.success('✅ Patient discharged! Email notification sent.');
       setShowDischargeModal(false);
       setSelectedPatient(null);
       setDischargeForm({
@@ -145,7 +126,6 @@ export default function WardClerkPage() {
         mpesaPhone: '',
       });
       fetchCurrentInpatients();
-      toast.success('✅ Patient discharged! Email notification sent.');
     } catch (error) {
       console.error('Failed to discharge patient:', error);
       toast.error('❌ Failed to discharge patient');
@@ -160,12 +140,14 @@ export default function WardClerkPage() {
     return new Date(dateString).toLocaleDateString();
   };
 
+  const user = useAuthStore((state) => state.user);
+
   return (
-    <DashboardLayout navItems={navItems} userName="Nurse Sarah K." userRole="Ward Clerk">
+    <DashboardLayout navItems={navItems} userName={user?.name || 'Ward Clerk'} userRole="Ward Clerk">
       <div className="space-y-6">
         {/* Header */}
         <div>
-          <h1 className="text-3xl font-bold text-blue-600">Welcome, Nurse Sarah</h1>
+          <h1 className="text-3xl font-bold text-blue-600">Welcome, {user?.name || 'Ward Clerk'}</h1>
           <p className="text-gray-600 mt-1">Ward management and patient admissions</p>
         </div>
 
@@ -609,7 +591,7 @@ export default function WardClerkPage() {
                   Cancel
                 </Button>
                 <Button type="submit" variant="danger" className="flex-1">
-                  Discharge Patient
+                  ✅ Discharge (Testing: No Payment)
                 </Button>
               </div>
             </form>
