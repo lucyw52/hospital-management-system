@@ -111,6 +111,14 @@ export class AdmissionsService {
   }
 
   async discharge(id: string) {
+    // For production: Check if ward invoice is paid
+    // const admission = await this.findOne(id);
+    // const wardInvoice = admission.visit.invoices.find(inv => inv.type === 'WARD');
+    // if (wardInvoice && wardInvoice.status !== 'PAID') {
+    //   throw new Error('Ward payment must be completed before discharge');
+    // }
+    
+    // For testing: Allow discharge without payment check
     const admission = await this.prisma.admission.update({
       where: { id },
       data: {
@@ -127,6 +135,23 @@ export class AdmissionsService {
           },
         },
       },
+    });
+
+    // Mark ward queue as done
+    await this.prisma.queueItem.updateMany({
+      where: {
+        visitId: admission.visitId,
+        stage: QueueStage.WARD,
+      },
+      data: {
+        status: 'DONE',
+      },
+    });
+
+    // Update visit status to completed
+    await this.prisma.visit.update({
+      where: { id: admission.visitId },
+      data: { status: 'COMPLETED' },
     });
 
     // Send discharge notification email

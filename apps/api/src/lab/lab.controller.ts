@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Patch, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Patch, UseGuards, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { LabService } from './lab.service';
@@ -20,6 +20,13 @@ export class LabController {
   @ApiOperation({ summary: 'Create lab order' })
   createOrder(@Body() createLabOrderDto: CreateLabOrderDto, @CurrentUser() user: any) {
     return this.labService.createOrder(createLabOrderDto, user.id);
+  }
+
+  @Get('orders')
+  @Roles(UserRole.LAB_TECH, UserRole.DOCTOR, UserRole.ADMIN)
+  @ApiOperation({ summary: 'Get lab orders with optional status filter' })
+  getLabOrders(@Query('status') status?: string) {
+    return this.labService.getLabOrders(status);
   }
 
   @Get('queue')

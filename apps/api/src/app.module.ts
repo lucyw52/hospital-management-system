@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from './prisma/prisma.module';
+import { CacheModule } from './cache/cache.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { PatientsModule } from './patients/patients.module';
@@ -21,6 +22,7 @@ import { EmailModule } from './email/email.module';
       isGlobal: true,
     }),
     PrismaModule,
+    CacheModule,
     EmailModule,
     AuthModule,
     UsersModule,

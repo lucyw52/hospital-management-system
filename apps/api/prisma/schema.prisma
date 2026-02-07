@@ -155,6 +155,8 @@ model Visit {
   @@index([patientId])
   @@index([createdByUserId])
   @@index([status])
+  @@index([status, patientId])
+  @@index([createdAt])
   @@map("visits")
 }
 
@@ -173,6 +175,8 @@ model Invoice {
 
   @@index([visitId])
   @@index([status])
+  @@index([visitId, status])
+  @@index([type, status])
   @@map("invoices")
 }
 
@@ -194,6 +198,7 @@ model Payment {
   @@index([invoiceId])
   @@index([status])
   @@index([mpesaCheckoutRequestId])
+  @@index([status, createdAt])
   @@map("payments")
 }
 
@@ -212,6 +217,9 @@ model QueueItem {
 
   @@index([visitId])
   @@index([stage, status])
+  @@index([priority])
+  @@index([visitId, stage])
+  @@index([status, createdAt])
   @@map("queue_items")
 }
 
@@ -250,6 +258,8 @@ model LabOrder {
   @@index([visitId])
   @@index([doctorId])
   @@index([status])
+  @@index([status, createdAt])
+  @@index([visitId, status])
   @@map("lab_orders")
 }
 
@@ -284,6 +294,8 @@ model Prescription {
   @@index([visitId])
   @@index([doctorId])
   @@index([status])
+  @@index([status, createdAt])
+  @@index([visitId, status])
   @@map("prescriptions")
 }
 

@@ -113,10 +113,30 @@ export class PharmacyService {
   }
 
   async dispensePrescription(id: string) {
-    return this.prisma.prescription.update({
+    const prescription = await this.prisma.prescription.update({
       where: { id },
       data: { status: 'DISPENSED' },
+      include: { visit: true },
     });
+
+    // Mark pharmacy queue as done
+    await this.prisma.queueItem.updateMany({
+      where: {
+        visitId: prescription.visitId,
+        stage: QueueStage.PHARMACY,
+      },
+      data: {
+        status: 'DONE',
+      },
+    });
+
+    // Update visit status to completed
+    await this.prisma.visit.update({
+      where: { id: prescription.visitId },
+      data: { status: 'COMPLETED' },
+    });
+
+    return prescription;
   }
 
   async getMedicineStock() {
