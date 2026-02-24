@@ -5,6 +5,7 @@ import DashboardLayout from '@/components/Layout/DashboardLayout';
 import { Card, Badge, Button } from '@/components/UI/Card';
 import { apiClient } from '@/lib/api-client';
 import { useAuthStore } from '@/store/auth-store';
+import { useAuthGuard } from '@/hooks/useAuthGuard';
 import toast from 'react-hot-toast';
 
 interface Admission {
@@ -45,6 +46,7 @@ const navItems = [
 ];
 
 export default function WardClerkPage() {
+  const { isChecking } = useAuthGuard(['WARD_CLERK']);
   const [incomingAdmissions, setIncomingAdmissions] = useState<Visit[]>([]);
   const [currentInpatients, setCurrentInpatients] = useState<Admission[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<Admission | null>(null);
@@ -63,16 +65,23 @@ export default function WardClerkPage() {
   });
 
   useEffect(() => {
-    fetchIncomingAdmissions();
-    fetchCurrentInpatients();
-  }, []);
+    if (!isChecking) {
+      fetchIncomingAdmissions();
+      fetchCurrentInpatients();
+    }
+  }, [isChecking]);
 
   const fetchIncomingAdmissions = async () => {
     try {
       const response = await apiClient.get('/queue?stage=WARD&status=WAITING');
       setIncomingAdmissions(response.data.map((q: any) => q.visit));
-    } catch (error) {
-      console.error('Failed to fetch incoming admissions:', error);
+    } catch (error: any) {
+      if (error.response?.status === 403) {
+        console.error('Access denied: Check authentication token and user permissions', error);
+        toast.error('❌ Access denied. Please login again.');
+      } else {
+        console.error('Failed to fetch incoming admissions:', error);
+      }
     }
   };
 
@@ -80,8 +89,13 @@ export default function WardClerkPage() {
     try {
       const response = await apiClient.get('/admissions/active');
       setCurrentInpatients(response.data);
-    } catch (error) {
-      console.error('Failed to fetch inpatients:', error);
+    } catch (error: any) {
+      if (error.response?.status === 403) {
+        console.error('Access denied: Check authentication token and user permissions', error);
+        toast.error('❌ Access denied. Please login again.');
+      } else {
+        console.error('Failed to fetch inpatients:', error);
+      }
     }
   };
 
@@ -141,6 +155,18 @@ export default function WardClerkPage() {
   };
 
   const user = useAuthStore((state) => state.user);
+
+  // Show loading while auth is being checked
+  if (isChecking) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-blue-100">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <DashboardLayout navItems={navItems} userName={user?.name || 'Ward Clerk'} userRole="Ward Clerk">

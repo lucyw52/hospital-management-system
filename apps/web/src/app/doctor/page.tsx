@@ -36,6 +36,14 @@ const navItems = [
   { label: 'Patients', href: '/doctor/patients', icon: '👥' },
 ];
 
+const calculateAge = (dob: string | null | undefined): number | string => {
+  if (!dob) return 'N/A';
+  const birthDate = new Date(dob);
+  if (isNaN(birthDate.getTime())) return 'N/A';
+  const age = new Date().getFullYear() - birthDate.getFullYear();
+  return age > 0 ? age : 'N/A';
+};
+
 export default function DoctorPage() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<QueueItem | null>(null);
@@ -271,7 +279,7 @@ export default function DoctorPage() {
                         </div>
                       </td>
                       <td className="py-3 px-4">
-                        {new Date().getFullYear() - new Date(item.visit.patient.dob).getFullYear()}
+                        {calculateAge(item.visit.patient.dob)}
                       </td>
                       <td className="py-3 px-4">
                         <Badge variant="info">{item.visit.visitType}</Badge>
@@ -345,7 +353,7 @@ export default function DoctorPage() {
                 <div>
                   <p className="text-sm text-blue-700">Age</p>
                   <p className="font-semibold text-blue-900">
-                    {new Date().getFullYear() - new Date(selectedPatient.visit.patient.dob).getFullYear()} years
+                    {calculateAge(selectedPatient.visit.patient.dob)} years
                   </p>
                 </div>
                 <div>

@@ -27,7 +27,7 @@ export function useAuthGuard(allowedRoles?: UserRole[]) {
           RECEPTIONIST: '/receptionist',
           DOCTOR: '/doctor',
           LAB_TECH: '/lab',
-          PHARMACIST: '/pharmacy',
+          PHARMACIST: '/pharmacist',
           WARD_CLERK: '/ward',
         };
         router.replace(roleRoutes[user.role] || '/login');

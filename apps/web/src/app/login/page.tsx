@@ -26,7 +26,7 @@ export default function LoginPage() {
         RECEPTIONIST: '/receptionist',
         DOCTOR: '/doctor',
         LAB_TECH: '/lab',
-        PHARMACIST: '/pharmacy',
+        PHARMACIST: '/pharmacist',
         WARD_CLERK: '/ward',
       };
       router.replace(roleRoutes[user.role] || '/');
@@ -63,7 +63,7 @@ export default function LoginPage() {
           RECEPTIONIST: '/receptionist',
           DOCTOR: '/doctor',
           LAB_TECH: '/lab',
-          PHARMACIST: '/pharmacy',
+          PHARMACIST: '/pharmacist',
           WARD_CLERK: '/ward',
         };
         router.push(roleRoutes[user.role] || '/');

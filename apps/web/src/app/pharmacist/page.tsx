@@ -250,7 +250,7 @@ export default function PharmacistPage() {
                           <div className="mt-2">
                             <p className="text-sm font-medium text-gray-700 mb-1">Medicines</p>
                             <div className="space-y-1">
-                              {prescription.items.map((item, index) => (
+                              {prescription.items?.map((item, index) => (
                                 <p key={index} className="text-sm text-gray-600">
                                   {item.name} - {item.dosage}, {item.frequency}, {item.duration}
                                 </p>
@@ -377,7 +377,7 @@ export default function PharmacistPage() {
 
             <div className="space-y-3">
               <p className="font-medium text-gray-900">Medications:</p>
-              {selectedPrescription.items.map((item, index) => (
+              {selectedPrescription.items?.map((item, index) => (
                 <div key={index} className="p-3 bg-gray-50 rounded-lg">
                   <p className="font-medium text-gray-900">{item.name}</p>
                   <p className="text-sm text-gray-600">
