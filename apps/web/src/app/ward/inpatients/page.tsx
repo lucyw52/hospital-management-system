@@ -5,6 +5,7 @@ import DashboardLayout from '@/components/Layout/DashboardLayout';
 import { Card, Badge, Button } from '@/components/UI/Card';
 import { apiClient } from '@/lib/api-client';
 import { useAuthGuard } from '@/hooks/useAuthGuard';
+import { useAuthStore } from '@/store/auth-store';
 import toast from 'react-hot-toast';
 
 const navItems = [
@@ -17,6 +18,7 @@ const navItems = [
 
 export default function InpatientsPage() {
   const { isChecking } = useAuthGuard(['WARD_CLERK']);
+  const user = useAuthStore((state) => state.user);
   const [inpatients, setInpatients] = useState([]);
 
   useEffect(() => {
@@ -52,7 +54,7 @@ export default function InpatientsPage() {
   }
 
   return (
-    <DashboardLayout navItems={navItems} userName="Nurse Sarah" userRole="Ward Clerk">
+    <DashboardLayout navItems={navItems} userName={user?.name || 'Ward Clerk'} userRole="Ward Clerk">
       <div className="space-y-6">
         <div>
           <h1 className="text-3xl font-bold text-blue-600">Current Inpatients</h1>

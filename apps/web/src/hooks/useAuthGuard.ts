@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/auth-store';
 import { UserRole } from '@/store/auth-store';
@@ -11,7 +11,13 @@ export function useAuthGuard(allowedRoles?: UserRole[]) {
     user: state.user,
   }));
 
+  // Stabilise the roles array so a new literal on every render doesn't
+  // retrigger the effect (the roles never change at runtime).
+  const allowedRolesRef = useRef(allowedRoles);
+
   useEffect(() => {
+    const roles = allowedRolesRef.current;
+
     // If not authenticated, redirect to login
     if (!isAuthenticated || !user) {
       router.replace('/login');
@@ -19,8 +25,8 @@ export function useAuthGuard(allowedRoles?: UserRole[]) {
     }
 
     // If specific roles are required, check if user has the right role
-    if (allowedRoles && allowedRoles.length > 0) {
-      if (!allowedRoles.includes(user.role)) {
+    if (roles && roles.length > 0) {
+      if (!roles.includes(user.role)) {
         // Redirect to their appropriate dashboard
         const roleRoutes: Record<UserRole, string> = {
           ADMIN: '/admin',
@@ -36,7 +42,7 @@ export function useAuthGuard(allowedRoles?: UserRole[]) {
     }
 
     setIsChecking(false);
-  }, [isAuthenticated, user, allowedRoles, router]);
+  }, [isAuthenticated, user, router]);
 
   return { isAuthenticated, user, isChecking };
 }

@@ -158,13 +158,17 @@ export default function DoctorPage() {
   const handleCreateAdmission = async () => {
     if (!selectedPatient) return;
     try {
-      await apiClient.post('/admissions', {
+      // Refer patient to ward queue (WAITING). Ward clerk will do the formal admission.
+      const notesParts = [`Ward referral: ${admissionForm.wardName || 'General Ward'}`];
+      if (admissionForm.bedNumber) notesParts.push(`Bed ${admissionForm.bedNumber}`);
+      if (admissionForm.reason) notesParts.push(`Reason: ${admissionForm.reason}`);
+      await apiClient.post('/queue', {
         visitId: selectedPatient.visit.id,
-        wardName: admissionForm.wardName,
-        bedNumber: admissionForm.bedNumber,
+        stage: 'WARD',
+        notes: notesParts.join(', '),
       });
     } catch (error) {
-      console.error('Failed to create admission:', error);
+      console.error('Failed to refer patient to ward:', error);
     }
   };
 

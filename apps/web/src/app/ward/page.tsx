@@ -37,6 +37,23 @@ interface Visit {
   createdAt: string;
 }
 
+interface QueueItem {
+  id: string;
+  stage: string;
+  status: string;
+  notes?: string;
+  createdAt: string;
+  visit: {
+    id: string;
+    visitType: string;
+    patient: {
+      id: string;
+      name: string;
+      phone: string;
+    };
+  };
+}
+
 const navItems = [
   { label: 'Dashboard', href: '/ward', icon: '🏥' },
   { label: 'Admissions', href: '/ward/admissions', icon: '📋' },
@@ -47,9 +64,10 @@ const navItems = [
 
 export default function WardClerkPage() {
   const { isChecking } = useAuthGuard(['WARD_CLERK']);
-  const [incomingAdmissions, setIncomingAdmissions] = useState<Visit[]>([]);
+  const [incomingAdmissions, setIncomingAdmissions] = useState<QueueItem[]>([]);
   const [currentInpatients, setCurrentInpatients] = useState<Admission[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<Admission | null>(null);
+  const [selectedQueueItem, setSelectedQueueItem] = useState<QueueItem | null>(null);
   const [showAdmitModal, setShowAdmitModal] = useState(false);
   const [showDischargeModal, setShowDischargeModal] = useState(false);
   const [admitForm, setAdmitForm] = useState({
@@ -73,8 +91,9 @@ export default function WardClerkPage() {
 
   const fetchIncomingAdmissions = async () => {
     try {
-      const response = await apiClient.get('/queue?stage=WARD&status=WAITING');
-      setIncomingAdmissions(response.data.map((q: any) => q.visit));
+      const response = await apiClient.get('/queue/WARD');
+      // Only show WAITING items — patients referred by doctor but not yet formally admitted
+      setIncomingAdmissions(response.data.filter((q: QueueItem) => q.status === 'WAITING'));
     } catch (error: any) {
       if (error.response?.status === 403) {
         console.error('Access denied: Check authentication token and user permissions', error);
@@ -101,17 +120,17 @@ export default function WardClerkPage() {
 
   const handleAdmitPatient = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedPatient) return;
+    if (!selectedQueueItem) return;
 
     try {
       await apiClient.post('/admissions', {
-        visitId: selectedPatient.visit.id,
+        visitId: selectedQueueItem.visit.id,
         wardName: admitForm.wardName,
         bedNumber: admitForm.bedNumber,
       });
 
       setShowAdmitModal(false);
-      setSelectedPatient(null);
+      setSelectedQueueItem(null);
       setAdmitForm({ wardName: 'General Ward', bedNumber: '' });
       fetchIncomingAdmissions();
       fetchCurrentInpatients();
@@ -262,26 +281,39 @@ export default function WardClerkPage() {
                       </td>
                     </tr>
                   ) : (
-                    incomingAdmissions.map((visit) => (
-                      <tr key={visit.id} className="border-b border-gray-100 hover:bg-gray-50">
+                    incomingAdmissions.map((item) => (
+                      <tr key={item.id} className="border-b border-gray-100 hover:bg-gray-50">
                         <td className="py-2 px-3">
                           <div>
                             <p className="text-sm font-medium text-gray-900">
-                              {visit.patient.name}
+                              {item.visit.patient.name}
                             </p>
-                            <p className="text-xs text-gray-600">{visit.patient.phone}</p>
+                            <p className="text-xs text-gray-600">{item.visit.patient.phone}</p>
                           </div>
                         </td>
-                        <td className="py-2 px-3 text-sm text-gray-900">General Ward</td>
-                        <td className="py-2 px-3 text-sm text-gray-900">G-101</td>
+                        <td className="py-2 px-3 text-sm text-gray-900">—</td>
+                        <td className="py-2 px-3 text-sm text-gray-900">—</td>
                         <td className="py-2 px-3 text-sm text-gray-600">
-                          {formatDate(visit.createdAt)}
+                          {formatDate(item.createdAt)}
                         </td>
                         <td className="py-2 px-3">
-                          <Badge variant="primary">Admitted</Badge>
+                          <Badge variant="warning">Pending</Badge>
                         </td>
                         <td className="py-2 px-3">
-                          <Button size="sm" variant="primary">
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            onClick={() => {
+                              setSelectedQueueItem(item);
+                              // Try to pre-populate ward name from doctor's referral notes
+                              const notesWard = item.notes?.match(/Ward referral:\s*([^,]+)/i)?.[1]?.trim();
+                              setAdmitForm({
+                                wardName: notesWard || 'General Ward',
+                                bedNumber: '',
+                              });
+                              setShowAdmitModal(true);
+                            }}
+                          >
                             Admit Patient
                           </Button>
                         </td>
@@ -513,6 +545,75 @@ export default function WardClerkPage() {
           </div>
         )}
       </div>
+
+      {/* Admit Modal */}
+      {showAdmitModal && selectedQueueItem && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Admit Patient</h2>
+
+            <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg mb-4">
+              <p className="text-sm text-blue-700">Patient</p>
+              <p className="font-semibold text-blue-900">{selectedQueueItem.visit.patient.name}</p>
+              <p className="text-sm text-blue-700">{selectedQueueItem.visit.patient.phone}</p>
+              {selectedQueueItem.notes && (
+                <p className="text-xs text-blue-600 mt-2 italic">📋 Doctor note: {selectedQueueItem.notes}</p>
+              )}
+            </div>
+
+            <form onSubmit={handleAdmitPatient} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Ward Name
+                </label>
+                <select
+                  value={admitForm.wardName}
+                  onChange={(e) => setAdmitForm({ ...admitForm, wardName: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="General Ward">General Ward</option>
+                  <option value="ICU">ICU</option>
+                  <option value="Maternity">Maternity</option>
+                  <option value="Paediatrics">Paediatrics</option>
+                  <option value="Surgical">Surgical</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Bed Number
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={admitForm.bedNumber}
+                  onChange={(e) => setAdmitForm({ ...admitForm, bedNumber: e.target.value })}
+                  placeholder="e.g. G-101"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-4">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    setShowAdmitModal(false);
+                    setSelectedQueueItem(null);
+                    setAdmitForm({ wardName: 'General Ward', bedNumber: '' });
+                  }}
+                  className="flex-1"
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" variant="primary" className="flex-1">
+                  ✅ Confirm Admission
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Discharge Modal */}
       {showDischargeModal && selectedPatient && (
