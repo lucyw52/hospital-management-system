@@ -15,7 +15,7 @@ export class QueueController {
 
   @Get()
   @ApiOperation({ summary: 'Get all queue items' })
-  @Roles(UserRole.ADMIN, UserRole.RECEPTIONIST, UserRole.DOCTOR)
+  @Roles(UserRole.ADMIN, UserRole.RECEPTIONIST, UserRole.DOCTOR, UserRole.WARD_CLERK, UserRole.LAB_TECH, UserRole.PHARMACIST)
   getAllQueue() {
     return this.queueService.getAllQueue();
   }
@@ -34,7 +34,7 @@ export class QueueController {
 
   @Post()
   @ApiOperation({ summary: 'Add visit to queue' })
-  @Roles(UserRole.ADMIN, UserRole.RECEPTIONIST)
+  @Roles(UserRole.ADMIN, UserRole.RECEPTIONIST, UserRole.DOCTOR)
   addToQueue(
     @Body('visitId') visitId: string,
     @Body('stage') stage: QueueStage,

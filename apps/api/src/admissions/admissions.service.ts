@@ -22,21 +22,38 @@ export class AdmissionsService {
       },
     });
 
-    // Add to WARD queue
-    await this.prisma.queueItem.create({
-      data: {
+    // Move the existing WAITING WARD queue item to IN_PROGRESS
+    // (the doctor already added it as WAITING when referring the patient)
+    const updated = await this.prisma.queueItem.updateMany({
+      where: {
         visitId: createAdmissionDto.visitId,
         stage: QueueStage.WARD,
+        status: 'WAITING',
+      },
+      data: {
         status: 'IN_PROGRESS',
         notes: `Admitted to ${createAdmissionDto.wardName}, Bed ${createAdmissionDto.bedNumber}`,
       },
     });
 
-    // Mark doctor queue as done
+    // If no existing WARD queue item found, create one (fallback for manual admissions)
+    if (updated.count === 0) {
+      await this.prisma.queueItem.create({
+        data: {
+          visitId: createAdmissionDto.visitId,
+          stage: QueueStage.WARD,
+          status: 'IN_PROGRESS',
+          notes: `Admitted to ${createAdmissionDto.wardName}, Bed ${createAdmissionDto.bedNumber}`,
+        },
+      });
+    }
+
+    // Mark doctor queue as done (in case it wasn't already)
     await this.prisma.queueItem.updateMany({
       where: {
         visitId: createAdmissionDto.visitId,
         stage: QueueStage.DOCTOR,
+        status: { not: 'DONE' },
       },
       data: {
         status: 'DONE',
