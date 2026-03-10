@@ -68,6 +68,14 @@ export default function ReceptionistPage() {
     visitType: 'CONSULTATION',
   });
 
+  // Visit creation payment flow
+  const [visitPaymentStep, setVisitPaymentStep] = useState<'FORM' | 'PAYMENT' | 'MPESA_WAITING'>('FORM');
+  const [visitPaymentMethod, setVisitPaymentMethod] = useState<'CASH' | 'MPESA'>('CASH');
+  const [visitMpesaPhone, setVisitMpesaPhone] = useState('');
+  const [visitInvoiceId, setVisitInvoiceId] = useState<string | null>(null);
+  const [visitCheckoutRequestId, setVisitCheckoutRequestId] = useState<string | null>(null);
+  const [isProcessingVisit, setIsProcessingVisit] = useState(false);
+
   useEffect(() => {
     fetchQueue();
   }, []);
@@ -114,35 +122,113 @@ export default function ReceptionistPage() {
     }
   };
 
+  const closeAndResetVisitModal = () => {
+    setShowCreateVisit(false);
+    setVisitPaymentStep('FORM');
+    setVisitPaymentMethod('CASH');
+    setVisitMpesaPhone('');
+    setVisitInvoiceId(null);
+    setVisitCheckoutRequestId(null);
+    setIsProcessingVisit(false);
+    setVisitForm({ patientId: '', visitType: 'CONSULTATION' });
+  };
+
   const handleCreateVisit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedPatient) return;
+    if (!selectedPatient || isProcessingVisit) return;
+    setIsProcessingVisit(true);
 
     try {
       const response = await apiClient.post('/visits', {
         ...visitForm,
         patientId: selectedPatient.id,
       });
-      
-      setShowCreateVisit(false);
-      fetchQueue();
-      toast.success('✅ Visit created! Patient queued to doctor directly (Testing: No payment required).');
+      const visitId = response.data.id;
+
+      if (visitForm.visitType === 'INJECTION_FOLLOWUP') {
+        toast.success('✅ Visit created! Patient queued directly to doctor (follow-up — no fee).');
+        closeAndResetVisitModal();
+        fetchQueue();
+      } else {
+        // Fetch the consultation invoice created by the backend
+        const invoicesRes = await apiClient.get(`/invoices/visit/${visitId}`);
+        const consultInvoice = (invoicesRes.data as any[]).find((inv: any) => inv.type === 'CONSULTATION');
+        setVisitInvoiceId(consultInvoice?.id ?? null);
+        setVisitMpesaPhone(selectedPatient.phone);
+        setVisitPaymentStep('PAYMENT');
+      }
     } catch (error) {
       console.error('Failed to create visit:', error);
       toast.error('❌ Failed to create visit');
+    } finally {
+      setIsProcessingVisit(false);
     }
   };
 
-  const initiatePayment = async (visitId: string) => {
-    // This would initiate M-Pesa STK push
-    try {
-      await apiClient.post('/payments/initiate', {
-        visitId,
-        phoneNumber: selectedPatient?.phone,
-      });
-    } catch (error) {
-      console.error('Failed to initiate payment:', error);
+  const handleVisitPayment = async () => {
+    if (!visitInvoiceId || isProcessingVisit) {
+      if (!visitInvoiceId) toast.error('Invoice not found. Please restart the visit.');
+      return;
     }
+    if (visitPaymentMethod === 'MPESA' && !visitMpesaPhone) {
+      toast.error('Please enter the M-Pesa phone number');
+      return;
+    }
+    setIsProcessingVisit(true);
+    try {
+      if (visitPaymentMethod === 'CASH') {
+        await apiClient.post('/payments', {
+          invoiceId: visitInvoiceId,
+          method: 'CASH',
+          amount: 100,
+        });
+        toast.success('✅ Cash payment recorded. Patient queued to doctor!');
+        closeAndResetVisitModal();
+        fetchQueue();
+      } else {
+        const res = await apiClient.post('/payments', {
+          invoiceId: visitInvoiceId,
+          method: 'MPESA',
+          amount: 100,
+          phoneNumber: visitMpesaPhone,
+        });
+        setVisitCheckoutRequestId(res.data.checkoutRequestId);
+        setVisitPaymentStep('MPESA_WAITING');
+        toast.success('📱 STK push sent! Ask patient to check phone.');
+        pollVisitPayment(res.data.checkoutRequestId);
+      }
+    } catch (error: any) {
+      const msg = error?.response?.data?.message || 'Payment failed';
+      toast.error(`❌ ${msg}`);
+    } finally {
+      setIsProcessingVisit(false);
+    }
+  };
+
+  const pollVisitPayment = (checkoutId: string) => {
+    let attempts = 0;
+    const interval = setInterval(async () => {
+      attempts++;
+      try {
+        const res = await apiClient.get(`/payments/mpesa/query/${checkoutId}`);
+        const status = res.data?.payment?.status || res.data?.status;
+        if (status === 'SUCCESS' || res.data?.status === 'paid') {
+          clearInterval(interval);
+          toast.success('✅ M-Pesa payment confirmed! Patient queued to doctor.');
+          closeAndResetVisitModal();
+          fetchQueue();
+        } else if (status === 'FAILED') {
+          clearInterval(interval);
+          toast.error('❌ M-Pesa payment failed. Please try again.');
+          setVisitPaymentStep('PAYMENT');
+        }
+      } catch {}
+      if (attempts >= 20) {
+        clearInterval(interval);
+        toast.error('⏰ Payment timeout. Verify if payment was received.');
+        setVisitPaymentStep('PAYMENT');
+      }
+    }, 3000);
   };
 
   const user = useAuthStore((state) => state.user);
@@ -156,18 +242,6 @@ export default function ReceptionistPage() {
           <p className="text-gray-600 mt-1">Patient registration and queue management</p>
         </div>
 
-        {/* Testing Mode Banner */}
-        <div className="p-4 bg-yellow-50 border-l-4 border-yellow-400 rounded-lg">
-          <div className="flex items-center gap-2">
-            <span className="text-2xl">⚠️</span>
-            <div>
-              <p className="font-semibold text-yellow-800">Testing Mode: Payments Disabled</p>
-              <p className="text-sm text-yellow-700">
-                All patients are queued directly to doctor without payment. Follow-up injection visits get priority.
-              </p>
-            </div>
-          </div>
-        </div>
 
         {/* Quick Actions */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -430,50 +504,155 @@ export default function ReceptionistPage() {
       {showCreateVisit && selectedPatient && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h2 className="text-xl font-bold text-gray-900 mb-4">Create Visit</h2>
-            <form onSubmit={handleCreateVisit} className="space-y-4">
-              <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                <p className="text-sm text-blue-800 font-medium">Patient:</p>
-                <p className="text-lg font-semibold text-blue-900">{selectedPatient.name}</p>
-                <p className="text-sm text-blue-700">{selectedPatient.phone}</p>
-              </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Visit Type *</label>
-                <select
-                  required
-                  value={visitForm.visitType}
-                  onChange={(e) => setVisitForm({ ...visitForm, visitType: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="CONSULTATION">Consultation</option>
-                  <option value="INJECTION_FOLLOWUP">Injection/Follow-up</option>
-                  <option value="REVIEW">Review</option>
-                </select>
-              </div>
+            {/* STEP 1: Visit Type Form */}
+            {visitPaymentStep === 'FORM' && (
+              <>
+                <h2 className="text-xl font-bold text-gray-900 mb-4">Create Visit</h2>
+                <form onSubmit={handleCreateVisit} className="space-y-4">
+                  <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                    <p className="text-sm text-blue-800 font-medium">Patient:</p>
+                    <p className="text-lg font-semibold text-blue-900">{selectedPatient.name}</p>
+                    <p className="text-sm text-blue-700">{selectedPatient.phone}</p>
+                  </div>
 
-              {visitForm.visitType === 'CONSULTATION' && (
-                <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                  <p className="text-sm text-yellow-800">
-                    ⚠️ Consultation requires payment. M-Pesa STK push will be initiated.
-                  </p>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Visit Type *</label>
+                    <select
+                      required
+                      value={visitForm.visitType}
+                      onChange={(e) => setVisitForm({ ...visitForm, visitType: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="CONSULTATION">Consultation (KSh 100)</option>
+                      <option value="INJECTION_FOLLOWUP">Injection / Follow-up (Free)</option>
+                      <option value="REVIEW">Review (KSh 100)</option>
+                    </select>
+                  </div>
+
+                  {visitForm.visitType !== 'INJECTION_FOLLOWUP' && (
+                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+                      💡 A consultation fee of <strong>KSh 100</strong> will be collected in the next step.
+                    </div>
+                  )}
+
+                  <div className="flex gap-2 pt-4">
+                    <Button type="button" variant="secondary" onClick={closeAndResetVisitModal} className="flex-1">
+                      Cancel
+                    </Button>
+                    <Button type="submit" className="flex-1" disabled={isProcessingVisit}>
+                      {isProcessingVisit ? 'Creating...' : visitForm.visitType === 'INJECTION_FOLLOWUP' ? 'Create Visit' : 'Next: Collect Fee →'}
+                    </Button>
+                  </div>
+                </form>
+              </>
+            )}
+
+            {/* STEP 2: Payment */}
+            {visitPaymentStep === 'PAYMENT' && (
+              <>
+                <h2 className="text-xl font-bold text-gray-900 mb-4">Collect Consultation Fee</h2>
+                <div className="space-y-4">
+                  <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                    <p className="text-sm text-blue-800 font-medium">Patient:</p>
+                    <p className="text-lg font-semibold text-blue-900">{selectedPatient.name}</p>
+                    <p className="text-sm text-blue-700">{selectedPatient.phone}</p>
+                  </div>
+
+                  <div className="p-4 bg-green-50 border border-green-200 rounded-lg flex items-center justify-between">
+                    <span className="text-green-800 font-semibold">Consultation Fee</span>
+                    <span className="text-2xl font-bold text-green-900">KSh 100</span>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Payment Method</label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setVisitPaymentMethod('CASH')}
+                        className={`flex-1 py-3 rounded-lg border-2 font-semibold transition-colors ${
+                          visitPaymentMethod === 'CASH'
+                            ? 'border-blue-500 bg-blue-50 text-blue-700'
+                            : 'border-gray-200 text-gray-600 hover:border-gray-400'
+                        }`}
+                      >
+                        💵 Cash
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setVisitPaymentMethod('MPESA')}
+                        className={`flex-1 py-3 rounded-lg border-2 font-semibold transition-colors ${
+                          visitPaymentMethod === 'MPESA'
+                            ? 'border-green-500 bg-green-50 text-green-700'
+                            : 'border-gray-200 text-gray-600 hover:border-gray-400'
+                        }`}
+                      >
+                        📱 M-Pesa
+                      </button>
+                    </div>
+                  </div>
+
+                  {visitPaymentMethod === 'MPESA' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">M-Pesa Phone Number</label>
+                      <input
+                        type="tel"
+                        value={visitMpesaPhone}
+                        onChange={(e) => setVisitMpesaPhone(e.target.value)}
+                        placeholder="254712345678"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">STK push will be sent to this number</p>
+                    </div>
+                  )}
+
+                  <div className="flex gap-2 pt-2">
+                    <Button type="button" variant="secondary" onClick={closeAndResetVisitModal} className="flex-1">
+                      Cancel
+                    </Button>
+                    <Button onClick={handleVisitPayment} className="flex-1" disabled={isProcessingVisit}>
+                      {isProcessingVisit
+                        ? 'Processing...'
+                        : visitPaymentMethod === 'CASH'
+                        ? '✅ Confirm Cash (KSh 100)'
+                        : '📱 Send M-Pesa Request'}
+                    </Button>
+                  </div>
                 </div>
-              )}
+              </>
+            )}
 
-              <div className="flex gap-2 pt-4">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => setShowCreateVisit(false)}
-                  className="flex-1"
-                >
-                  Cancel
-                </Button>
-                <Button type="submit" className="flex-1">
-                  Create Visit
-                </Button>
-              </div>
-            </form>
+            {/* STEP 3: M-Pesa Waiting */}
+            {visitPaymentStep === 'MPESA_WAITING' && (
+              <>
+                <h2 className="text-xl font-bold text-gray-900 mb-4">Waiting for M-Pesa Payment</h2>
+                <div className="space-y-6 text-center py-4">
+                  <div className="text-6xl animate-pulse">📱</div>
+                  <div>
+                    <p className="text-lg font-semibold text-gray-900">STK Push Sent!</p>
+                    <p className="text-gray-600 mt-1">
+                      A payment prompt of <strong>KSh 100</strong> was sent to:
+                    </p>
+                    <p className="text-xl font-bold text-blue-600 mt-2">{visitMpesaPhone}</p>
+                  </div>
+                  <p className="text-sm text-gray-500">Waiting for confirmation — up to 60 seconds.</p>
+                  <div className="flex gap-2">
+                    <Button type="button" variant="secondary" onClick={closeAndResetVisitModal} className="flex-1">
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => setVisitPaymentStep('PAYMENT')}
+                      className="flex-1"
+                    >
+                      Try Different Method
+                    </Button>
+                  </div>
+                </div>
+              </>
+            )}
+
           </div>
         </div>
       )}

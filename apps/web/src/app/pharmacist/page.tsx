@@ -18,10 +18,10 @@ interface Prescription {
     };
   };
   items: Array<{
-    name: string;
+    medicine?: string;
+    name?: string;
     dosage: string;
-    frequency: string;
-    duration: string;
+    quantity?: number;
   }>;
   status: string;
   createdAt: string;
@@ -32,7 +32,7 @@ interface StockItem {
   name: string;
   quantity: number;
   reorderLevel: number;
-  unit: string;
+  price: number;
 }
 
 const navItems = [
@@ -52,6 +52,14 @@ export default function PharmacistPage() {
   const [showStockView, setShowStockView] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'MPESA'>('CASH');
   const [mpesaPhone, setMpesaPhone] = useState('');
+  const [pharmaInvoiceId, setPharmaInvoiceId] = useState<string | null>(null);
+  const [pharmaPayAmount, setPharmaPayAmount] = useState<number>(0);
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [showAddMedicineModal, setShowAddMedicineModal] = useState(false);
+  const [showUpdateStockModal, setShowUpdateStockModal] = useState(false);
+  const [selectedStockItem, setSelectedStockItem] = useState<StockItem | null>(null);
+  const [newMedicineForm, setNewMedicineForm] = useState({ name: '', quantity: 0, reorderLevel: 0, price: 0 });
+  const [updateQuantity, setUpdateQuantity] = useState(0);
 
   useEffect(() => {
     fetchPrescriptions();
@@ -76,9 +84,20 @@ export default function PharmacistPage() {
     }
   };
 
-  const handleDispense = (prescription: Prescription) => {
+  const handleDispense = async (prescription: Prescription) => {
     setSelectedPrescription(prescription);
-    setShowDispenseModal(true);
+    // Fetch the pharmacy invoice for this visit
+    try {
+      const res = await apiClient.get(`/invoices/visit/${prescription.visit.id}`);
+      const pharmaInv = (res.data as any[]).find((inv: any) => inv.type === 'PHARMACY');
+      setPharmaInvoiceId(pharmaInv?.id ?? null);
+      setPharmaPayAmount(pharmaInv?.amount ?? 0);
+    } catch {
+      setPharmaInvoiceId(null);
+      setPharmaPayAmount(0);
+    }
+    setMpesaPhone(prescription.visit.patient.phone);
+    setShowPaymentModal(true);
   };
 
   const handleConfirmDispense = async () => {
@@ -100,31 +119,109 @@ export default function PharmacistPage() {
 
   const handleProcessPayment = async () => {
     if (!selectedPrescription) return;
-
+    if (!pharmaInvoiceId) {
+      toast.error('No invoice found for this prescription. Contact administrator.');
+      return;
+    }
     if (paymentMethod === 'MPESA' && !mpesaPhone) {
       toast.error('Please enter M-Pesa phone number');
       return;
     }
+    if (!pharmaPayAmount || pharmaPayAmount <= 0) {
+      toast.error('Please enter a valid payment amount');
+      return;
+    }
 
+    setIsProcessingPayment(true);
     try {
       if (paymentMethod === 'CASH') {
-        // Process cash payment and dispense
-        await apiClient.patch(`/pharmacy/prescriptions/${selectedPrescription.id}/dispense`);
-        toast.success('✅ Payment received and medicine dispensed!');
+        await apiClient.post('/payments', {
+          invoiceId: pharmaInvoiceId,
+          method: 'CASH',
+          amount: pharmaPayAmount,
+        });
+        toast.success('✅ Cash payment received! Medicine dispensed.');
+        setShowPaymentModal(false);
+        setSelectedPrescription(null);
+        setPharmaInvoiceId(null);
+        setMpesaPhone('');
+        fetchPrescriptions();
       } else {
-        // Process M-Pesa payment
-        toast.loading('📱 M-Pesa request sent. Waiting for payment...');
-        await apiClient.patch(`/pharmacy/prescriptions/${selectedPrescription.id}/dispense`);
-        toast.success('✅ Payment confirmed and medicine dispensed!');
+        const res = await apiClient.post('/payments', {
+          invoiceId: pharmaInvoiceId,
+          method: 'MPESA',
+          amount: pharmaPayAmount,
+          phoneNumber: mpesaPhone,
+        });
+        toast.success('📱 STK push sent! Waiting for patient payment...');
+        setShowPaymentModal(false);
+        setSelectedPrescription(null);
+        setPharmaInvoiceId(null);
+        setMpesaPhone('');
+        fetchPrescriptions();
+        pollPharmaPayment(res.data.checkoutRequestId);
       }
-      
-      setShowPaymentModal(false);
-      setSelectedPrescription(null);
-      setMpesaPhone('');
-      fetchPrescriptions();
-    } catch (error) {
-      console.error('Failed to process payment:', error);
-      toast.error('❌ Failed to process payment');
+    } catch (error: any) {
+      const msg = error?.response?.data?.message || 'Payment failed';
+      toast.error(`❌ ${msg}`);
+    } finally {
+      setIsProcessingPayment(false);
+    }
+  };
+
+  const pollPharmaPayment = (checkoutId: string) => {
+    let attempts = 0;
+    const interval = setInterval(async () => {
+      attempts++;
+      try {
+        const res = await apiClient.get(`/payments/mpesa/query/${checkoutId}`);
+        const status = res.data?.payment?.status || res.data?.status;
+        if (status === 'SUCCESS' || res.data?.status === 'paid') {
+          clearInterval(interval);
+          toast.success('✅ M-Pesa payment confirmed! Medicine dispensed.');
+          fetchPrescriptions();
+        } else if (status === 'FAILED') {
+          clearInterval(interval);
+          toast.error('❌ M-Pesa payment failed. Patient needs to retry.');
+        }
+      } catch {}
+      if (attempts >= 20) {
+        clearInterval(interval);
+        toast.error('⏰ M-Pesa timeout. Verify payment status with patient.');
+      }
+    }, 3000);
+  };
+
+  const handleAddMedicine = async () => {
+    if (!newMedicineForm.name) {
+      toast.error('Medicine name is required');
+      return;
+    }
+    try {
+      await apiClient.post('/pharmacy/stock', newMedicineForm);
+      toast.success('✅ Medicine added successfully!');
+      setShowAddMedicineModal(false);
+      setNewMedicineForm({ name: '', quantity: 0, reorderLevel: 0, price: 0 });
+      fetchStockItems();
+    } catch (error: any) {
+      console.error('Failed to add medicine:', error);
+      const msg = error?.response?.data?.message || '❌ Failed to add medicine';
+      toast.error(msg);
+    }
+  };
+
+  const handleUpdateStock = async () => {
+    if (!selectedStockItem) return;
+    try {
+      await apiClient.patch(`/pharmacy/stock/${selectedStockItem.id}`, { quantity: updateQuantity });
+      toast.success('✅ Stock updated successfully!');
+      setShowUpdateStockModal(false);
+      setSelectedStockItem(null);
+      fetchStockItems();
+    } catch (error: any) {
+      console.error('Failed to update stock:', error);
+      const msg = error?.response?.data?.message || '❌ Failed to update stock';
+      toast.error(msg);
     }
   };
 
@@ -133,6 +230,7 @@ export default function PharmacistPage() {
   const user = useAuthStore((state) => state.user);
 
   return (
+    <>
     <DashboardLayout navItems={navItems} userName={user?.name || 'Pharmacist'} userRole="Pharmacist">
       <div className="space-y-6">
         {/* Header */}
@@ -250,9 +348,9 @@ export default function PharmacistPage() {
                           <div className="mt-2">
                             <p className="text-sm font-medium text-gray-700 mb-1">Medicines</p>
                             <div className="space-y-1">
-                              {prescription.items?.map((item, index) => (
+                              {prescription.items?.map((item: any, index) => (
                                 <p key={index} className="text-sm text-gray-600">
-                                  {item.name} - {item.dosage}, {item.frequency}, {item.duration}
+                                  {item.medicine || item.name} - {item.dosage}{item.quantity ? ` × ${item.quantity}` : ''}
                                 </p>
                               ))}
                             </div>
@@ -260,11 +358,8 @@ export default function PharmacistPage() {
 
                           {prescription.status === 'PENDING' && (
                             <div className="flex gap-2 mt-4">
-                              <Button size="sm" onClick={() => handleDispense(prescription)}>
-                                Dispense
-                              </Button>
-                              <Button size="sm" variant="success">
-                                Request Payment
+                              <Button size="sm" variant="success" onClick={() => handleDispense(prescription)}>
+                                💳 Pay &amp; Dispense
                               </Button>
                             </div>
                           )}
@@ -308,6 +403,11 @@ export default function PharmacistPage() {
         ) : (
           /* Stock Management View */
           <Card title="Stock Management Section">
+            <div className="flex justify-end mb-4">
+              <Button variant="primary" onClick={() => setShowAddMedicineModal(true)}>
+                + Add Medicine
+              </Button>
+            </div>
             {lowStockItems.length > 0 && (
               <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2">
                 <Badge variant="danger">Low Stock Alert</Badge>
@@ -322,22 +422,22 @@ export default function PharmacistPage() {
                 <div key={item.id} className="border border-gray-200 rounded-lg p-4">
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
-                      <div className="grid grid-cols-3 gap-4">
+                      <div className="grid grid-cols-4 gap-4">
                         <div>
                           <p className="text-sm text-gray-600">Name</p>
                           <p className="font-semibold text-gray-900">{item.name}</p>
                         </div>
                         <div>
                           <p className="text-sm text-gray-600">Quantity</p>
-                          <p className="font-semibold text-gray-900">
-                            {item.quantity} {item.unit}
-                          </p>
+                          <p className="font-semibold text-gray-900">{item.quantity}</p>
                         </div>
                         <div>
                           <p className="text-sm text-gray-600">Reorder Level</p>
-                          <p className="font-semibold text-gray-900">
-                            {item.reorderLevel} {item.unit}
-                          </p>
+                          <p className="font-semibold text-gray-900">{item.reorderLevel}</p>
+                        </div>
+                        <div>
+                          <p className="text-sm text-gray-600">Price (KSh)</p>
+                          <p className="font-semibold text-gray-900">{item.price?.toFixed(2)}</p>
                         </div>
                       </div>
                       {item.quantity <= item.reorderLevel && (
@@ -347,12 +447,15 @@ export default function PharmacistPage() {
                       )}
                     </div>
                     <div className="flex gap-2">
-                      {item.quantity <= item.reorderLevel && (
-                        <Button size="sm" variant="primary">
-                          Reorder
-                        </Button>
-                      )}
-                      <Button size="sm" variant="secondary">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          setSelectedStockItem(item);
+                          setUpdateQuantity(item.quantity);
+                          setShowUpdateStockModal(true);
+                        }}
+                      >
                         Update Stock
                       </Button>
                     </div>
@@ -363,6 +466,99 @@ export default function PharmacistPage() {
           </Card>
         )}
       </div>
+
+    </DashboardLayout>
+
+      {/* Add Medicine Modal */}
+      {showAddMedicineModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Add New Medicine</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Medicine Name</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Amoxicillin"
+                  value={newMedicineForm.name}
+                  onChange={(e) => setNewMedicineForm({ ...newMedicineForm, name: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
+                <input
+                  type="number"
+                  placeholder="e.g. 100"
+                  min={0}
+                  value={newMedicineForm.quantity}
+                  onChange={(e) => setNewMedicineForm({ ...newMedicineForm, quantity: parseInt(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Reorder Level</label>
+                <input
+                  type="number"
+                  placeholder="e.g. 20"
+                  min={0}
+                  value={newMedicineForm.reorderLevel}
+                  onChange={(e) => setNewMedicineForm({ ...newMedicineForm, reorderLevel: parseInt(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Price (KSh)</label>
+                <input
+                  type="number"
+                  placeholder="e.g. 50"
+                  min={0}
+                  value={newMedicineForm.price}
+                  onChange={(e) => setNewMedicineForm({ ...newMedicineForm, price: parseFloat(e.target.value) || 0 })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2 mt-6">
+              <Button variant="secondary" onClick={() => setShowAddMedicineModal(false)} className="flex-1">
+                Cancel
+              </Button>
+              <Button variant="primary" onClick={handleAddMedicine} className="flex-1">
+                Add Medicine
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Update Stock Modal */}
+      {showUpdateStockModal && selectedStockItem && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-sm">
+            <h2 className="text-xl font-bold text-gray-900 mb-1">Update Stock</h2>
+            <p className="text-sm text-gray-500 mb-4">{selectedStockItem.name}</p>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">New Quantity</label>
+              <input
+                type="number"
+                min={0}
+                value={updateQuantity}
+                onChange={(e) => setUpdateQuantity(parseInt(e.target.value) || 0)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-400 mt-1">Current: {selectedStockItem.quantity}</p>
+            </div>
+            <div className="flex gap-2 mt-6">
+              <Button variant="secondary" onClick={() => setShowUpdateStockModal(false)} className="flex-1">
+                Cancel
+              </Button>
+              <Button variant="primary" onClick={handleUpdateStock} className="flex-1">
+                Update
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Dispense Modal */}
       {showDispenseModal && selectedPrescription && (
@@ -377,11 +573,11 @@ export default function PharmacistPage() {
 
             <div className="space-y-3">
               <p className="font-medium text-gray-900">Medications:</p>
-              {selectedPrescription.items?.map((item, index) => (
+              {selectedPrescription.items?.map((item: any, index) => (
                 <div key={index} className="p-3 bg-gray-50 rounded-lg">
-                  <p className="font-medium text-gray-900">{item.name}</p>
+                  <p className="font-medium text-gray-900">{item.medicine || item.name}</p>
                   <p className="text-sm text-gray-600">
-                    {item.dosage} • {item.frequency} • {item.duration}
+                    {item.dosage}{item.quantity ? ` • Qty: ${item.quantity}` : ''}
                   </p>
                 </div>
               ))}
@@ -410,35 +606,68 @@ export default function PharmacistPage() {
       {showPaymentModal && selectedPrescription && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h2 className="text-xl font-bold text-gray-900 mb-4">Process Payment</h2>
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Pharmacy Payment</h2>
 
             <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg mb-4">
               <p className="text-sm text-blue-700">Patient</p>
               <p className="font-semibold text-blue-900">{selectedPrescription.visit.patient.name}</p>
+              <p className="text-sm text-blue-600">{selectedPrescription.visit.patient.phone}</p>
+            </div>
+
+            <div className="space-y-3 mb-4">
+              <p className="font-medium text-gray-900">Prescribed Medications:</p>
+              {selectedPrescription.items?.map((item: any, index) => (
+                <div key={index} className="p-3 bg-gray-50 rounded-lg">
+                  <p className="font-medium text-gray-900">{item.medicine || item.name}</p>
+                  <p className="text-sm text-gray-600">
+                    {item.dosage}{item.quantity ? ` • Qty: ${item.quantity}` : ''}
+                  </p>
+                </div>
+              ))}
             </div>
 
             <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Amount (KSh) *
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  value={pharmaPayAmount}
+                  onChange={(e) => setPharmaPayAmount(Number(e.target.value))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">Pre-filled from invoice. Edit if needed.</p>
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Payment Method
                 </label>
                 <div className="flex gap-2">
-                  <Button
+                  <button
                     type="button"
-                    variant={paymentMethod === 'CASH' ? 'primary' : 'secondary'}
                     onClick={() => setPaymentMethod('CASH')}
-                    className="flex-1"
+                    className={`flex-1 py-3 rounded-lg border-2 font-semibold transition-colors ${
+                      paymentMethod === 'CASH'
+                        ? 'border-blue-500 bg-blue-50 text-blue-700'
+                        : 'border-gray-200 text-gray-600 hover:border-gray-400'
+                    }`}
                   >
                     💵 Cash
-                  </Button>
-                  <Button
+                  </button>
+                  <button
                     type="button"
-                    variant={paymentMethod === 'MPESA' ? 'success' : 'secondary'}
                     onClick={() => setPaymentMethod('MPESA')}
-                    className="flex-1"
+                    className={`flex-1 py-3 rounded-lg border-2 font-semibold transition-colors ${
+                      paymentMethod === 'MPESA'
+                        ? 'border-green-500 bg-green-50 text-green-700'
+                        : 'border-gray-200 text-gray-600 hover:border-gray-400'
+                    }`}
                   >
                     📱 M-Pesa
-                  </Button>
+                  </button>
                 </div>
               </div>
 
@@ -463,19 +692,24 @@ export default function PharmacistPage() {
                 variant="secondary"
                 onClick={() => {
                   setShowPaymentModal(false);
-                  setShowDispenseModal(true);
+                  setSelectedPrescription(null);
+                  setPharmaInvoiceId(null);
                 }}
                 className="flex-1"
               >
-                Back
+                Cancel
               </Button>
-              <Button onClick={handleProcessPayment} variant="success" className="flex-1">
-                {paymentMethod === 'CASH' ? 'Confirm Payment' : 'Send M-Pesa Request'}
+              <Button onClick={handleProcessPayment} variant="success" className="flex-1" disabled={isProcessingPayment}>
+                {isProcessingPayment
+                  ? 'Processing...'
+                  : paymentMethod === 'CASH'
+                  ? '✅ Confirm Payment'
+                  : '📱 Send M-Pesa Request'}
               </Button>
             </div>
           </div>
         </div>
       )}
-    </DashboardLayout>
+    </>
   );
 }

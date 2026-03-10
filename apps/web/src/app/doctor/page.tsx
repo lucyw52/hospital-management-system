@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import DashboardLayout from '@/components/Layout/DashboardLayout';
 import { Card, Badge, Button } from '@/components/UI/Card';
 import { apiClient } from '@/lib/api-client';
@@ -55,8 +55,12 @@ export default function DoctorPage() {
   });
 
   const [prescriptionForm, setPrescriptionForm] = useState({
-    medications: [{ name: '', dosage: '', frequency: '', duration: '' }],
+    medications: [{ medicine: '', dosage: '', quantity: 1 }],
   });
+  const [stockMedicines, setStockMedicines] = useState<Array<{ id: string; name: string; quantity: number }>>([]);
+  const [medicineSearch, setMedicineSearch] = useState<string[]>(['']);
+  const [openDropdown, setOpenDropdown] = useState<number | null>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   const [labOrderForm, setLabOrderForm] = useState({
     tests: [''],
@@ -70,6 +74,17 @@ export default function DoctorPage() {
 
   useEffect(() => {
     fetchQueue();
+    fetchStockMedicines();
+  }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setOpenDropdown(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   const fetchQueue = async () => {
@@ -78,6 +93,15 @@ export default function DoctorPage() {
       setQueue(response.data);
     } catch (error) {
       console.error('Failed to fetch queue:', error);
+    }
+  };
+
+  const fetchStockMedicines = async () => {
+    try {
+      const response = await apiClient.get('/pharmacy/stock');
+      setStockMedicines(response.data);
+    } catch (error) {
+      console.error('Failed to fetch stock medicines:', error);
     }
   };
 
@@ -174,7 +198,8 @@ export default function DoctorPage() {
 
   const resetForms = () => {
     setConsultationForm({ notes: '', diagnosis: '', action: '' });
-    setPrescriptionForm({ medications: [{ name: '', dosage: '', frequency: '', duration: '' }] });
+    setPrescriptionForm({ medications: [{ medicine: '', dosage: '', quantity: 1 }] });
+    setMedicineSearch(['']);
     setLabOrderForm({ tests: [''] });
     setAdmissionForm({ wardName: '', bedNumber: '', reason: '' });
   };
@@ -184,9 +209,10 @@ export default function DoctorPage() {
       ...prescriptionForm,
       medications: [
         ...prescriptionForm.medications,
-        { name: '', dosage: '', frequency: '', duration: '' },
+        { medicine: '', dosage: '', quantity: 1 },
       ],
     });
+    setMedicineSearch([...medicineSearch, '']);
   };
 
   const addTest = () => {
@@ -418,54 +444,93 @@ export default function DoctorPage() {
                       + Add Medication
                     </Button>
                   </div>
-                  {prescriptionForm.medications.map((med, index) => (
-                    <div key={index} className="grid grid-cols-4 gap-2">
+                  <div ref={dropdownRef}>
+                  {prescriptionForm.medications.map((med, index) => {
+                    const filteredMeds = stockMedicines.filter((s) =>
+                      s.name.toLowerCase().includes((medicineSearch[index] || '').toLowerCase())
+                    );
+                    return (
+                    <div key={index} className="grid grid-cols-3 gap-2 mb-2">
+                      {/* Medicine search with dropdown */}
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="Search medicine..."
+                          value={medicineSearch[index] ?? med.medicine}
+                          onChange={(e) => {
+                            const newSearch = [...medicineSearch];
+                            newSearch[index] = e.target.value;
+                            setMedicineSearch(newSearch);
+                            const newMeds = [...prescriptionForm.medications];
+                            newMeds[index].medicine = e.target.value;
+                            setPrescriptionForm({ ...prescriptionForm, medications: newMeds });
+                            setOpenDropdown(index);
+                          }}
+                          onFocus={() => setOpenDropdown(index)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        {openDropdown === index && filteredMeds.length > 0 && (
+                          <ul className="absolute z-50 w-full bg-white border border-gray-200 rounded-lg shadow-lg mt-1 max-h-48 overflow-y-auto">
+                            {filteredMeds.map((stock) => (
+                              <li
+                                key={stock.id}
+                                className="px-3 py-2 hover:bg-blue-50 cursor-pointer flex items-center justify-between"
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  const newMeds = [...prescriptionForm.medications];
+                                  newMeds[index].medicine = stock.name;
+                                  setPrescriptionForm({ ...prescriptionForm, medications: newMeds });
+                                  const newSearch = [...medicineSearch];
+                                  newSearch[index] = stock.name;
+                                  setMedicineSearch(newSearch);
+                                  setOpenDropdown(null);
+                                }}
+                              >
+                                <span className="font-medium text-gray-900">{stock.name}</span>
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                  stock.quantity <= 0
+                                    ? 'bg-red-100 text-red-700'
+                                    : 'bg-green-100 text-green-700'
+                                }`}>
+                                  {stock.quantity <= 0 ? 'Out of stock' : `${stock.quantity} in stock`}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {openDropdown === index && filteredMeds.length === 0 && (medicineSearch[index] || '').length > 0 && (
+                          <div className="absolute z-50 w-full bg-white border border-gray-200 rounded-lg shadow-lg mt-1 px-3 py-2 text-sm text-gray-500">
+                            No medicines found in stock
+                          </div>
+                        )}
+                      </div>
                       <input
                         type="text"
-                        placeholder="Medication name"
-                        value={med.name}
-                        onChange={(e) => {
-                          const newMeds = [...prescriptionForm.medications];
-                          newMeds[index].name = e.target.value;
-                          setPrescriptionForm({ ...prescriptionForm, medications: newMeds });
-                        }}
-                        className="px-3 py-2 border border-gray-300 rounded-lg"
-                      />
-                      <input
-                        type="text"
-                        placeholder="Dosage"
+                        placeholder="e.g. 500mg twice daily"
                         value={med.dosage}
                         onChange={(e) => {
                           const newMeds = [...prescriptionForm.medications];
                           newMeds[index].dosage = e.target.value;
                           setPrescriptionForm({ ...prescriptionForm, medications: newMeds });
                         }}
-                        className="px-3 py-2 border border-gray-300 rounded-lg"
+                        className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                       />
                       <input
-                        type="text"
-                        placeholder="Frequency"
-                        value={med.frequency}
+                        type="number"
+                        placeholder="e.g. 1"
+                        min={1}
+                        value={med.quantity}
                         onChange={(e) => {
                           const newMeds = [...prescriptionForm.medications];
-                          newMeds[index].frequency = e.target.value;
+                          newMeds[index].quantity = parseInt(e.target.value) || 1;
                           setPrescriptionForm({ ...prescriptionForm, medications: newMeds });
                         }}
-                        className="px-3 py-2 border border-gray-300 rounded-lg"
-                      />
-                      <input
-                        type="text"
-                        placeholder="Duration"
-                        value={med.duration}
-                        onChange={(e) => {
-                          const newMeds = [...prescriptionForm.medications];
-                          newMeds[index].duration = e.target.value;
-                          setPrescriptionForm({ ...prescriptionForm, medications: newMeds });
-                        }}
-                        className="px-3 py-2 border border-gray-300 rounded-lg"
+                        className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                       />
                     </div>
-                  ))}
+                    );
+                  })}
+                  </div>
                 </div>
               )}
 

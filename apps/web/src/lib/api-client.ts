@@ -49,13 +49,16 @@ apiClient.interceptors.response.use(
       return Promise.reject(error);
     }
     
-    if (error.response?.status === 401 || error.response?.status === 403) {
+    if (error.response?.status === 401) {
       if (typeof window !== 'undefined') {
         localStorage.removeItem('token');
         localStorage.removeItem('user');
         localStorage.removeItem('auth-storage');
         window.location.href = '/login';
       }
+    }
+    if (error.response?.status === 403) {
+      console.warn('Access denied (403):', error.config?.url);
     }
     return Promise.reject(error);
   }

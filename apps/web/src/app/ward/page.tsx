@@ -18,6 +18,28 @@ interface Admission {
       phone: string;
       dob: string;
     };
+    consultations?: Array<{
+      id: string;
+      notes: string;
+      diagnosis: string;
+      createdAt: string;
+      doctor?: { name: string };
+    }>;
+    prescriptions?: Array<{
+      id: string;
+      status: string;
+      itemsJson?: string;
+      items?: any[];
+      createdAt: string;
+      doctor?: { name: string };
+    }>;
+    labOrders?: Array<{
+      id: string;
+      testsJson: string;
+      status: string;
+      createdAt: string;
+      labResults?: Array<{ id: string; resultsJson: string; attachmentUrl?: string; createdAt: string }>;
+    }>;
   };
   wardName: string;
   bedNumber: string;
@@ -70,6 +92,24 @@ export default function WardClerkPage() {
   const [selectedQueueItem, setSelectedQueueItem] = useState<QueueItem | null>(null);
   const [showAdmitModal, setShowAdmitModal] = useState(false);
   const [showDischargeModal, setShowDischargeModal] = useState(false);
+  const [isProcessingDischarge, setIsProcessingDischarge] = useState(false);
+
+  // View details
+  const [showViewModal, setShowViewModal] = useState(false);
+  const [viewingAdmission, setViewingAdmission] = useState<Admission | null>(null);
+  const [loadingDetails, setLoadingDetails] = useState(false);
+
+  // Billing & insurance
+  const [billingForm, setBillingForm] = useState({
+    dailyRate: 0,
+    days: 1,
+    hasInsurance: false,
+    insuranceProvider: '',
+    insuranceMemberNo: '',
+  });
+  const INSURANCE_PROVIDERS = ['SHA', 'NHIF Legacy', 'Jubilee Insurance', 'AAR Insurance'];
+  const INSURANCE_THRESHOLD = 10000;
+  const INSURANCE_COVER_PCT = 0.5;
   const [admitForm, setAdmitForm] = useState({
     wardName: 'General Ward',
     bedNumber: '',
@@ -81,6 +121,13 @@ export default function WardClerkPage() {
     paymentMethod: 'CASH' as 'CASH' | 'MPESA',
     mpesaPhone: '',
   });
+
+  // Derived billing calculations
+  const computedTotal = billingForm.dailyRate * billingForm.days;
+  const insurancePays = billingForm.hasInsurance && computedTotal >= INSURANCE_THRESHOLD
+    ? Math.floor(computedTotal * INSURANCE_COVER_PCT)
+    : 0;
+  const patientOwes = computedTotal - insurancePays;
 
   useEffect(() => {
     if (!isChecking) {
@@ -118,6 +165,36 @@ export default function WardClerkPage() {
     }
   };
 
+  const fetchVisitDetails = async (admission: Admission) => {
+    setLoadingDetails(true);
+    try {
+      const visitId = admission.visit.id;
+      const [consultRes, labRes] = await Promise.all([
+        apiClient.get(`/consultations/visit/${visitId}`).catch(() => ({ data: [] })),
+        apiClient.get(`/lab/results/visit/${visitId}`).catch(() => ({ data: [] })),
+      ]);
+      // Also enrich prescriptions items from itemsJson
+      const enrichedAdmission: Admission = {
+        ...admission,
+        visit: {
+          ...admission.visit,
+          consultations: consultRes.data,
+          labOrders: labRes.data,
+          prescriptions: (admission.visit.prescriptions || []).map((p: any) => ({
+            ...p,
+            items: p.items || (p.itemsJson ? JSON.parse(p.itemsJson) : []),
+          })),
+        },
+      };
+      setViewingAdmission(enrichedAdmission);
+    } catch (error) {
+      console.error('Failed to fetch visit details:', error);
+      setViewingAdmission(admission);
+    } finally {
+      setLoadingDetails(false);
+    }
+  };
+
   const handleAdmitPatient = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedQueueItem) return;
@@ -145,24 +222,78 @@ export default function WardClerkPage() {
     e.preventDefault();
     if (!selectedPatient) return;
 
-    try {
-      // For testing: Discharge directly without payment check
-      await apiClient.patch(`/admissions/${selectedPatient.id}/discharge`);
-
-      toast.success('✅ Patient discharged! Email notification sent.');
-      setShowDischargeModal(false);
-      setSelectedPatient(null);
-      setDischargeForm({
-        dischargeSummary: '',
-        totalCharges: 0,
-        paymentMethod: 'CASH',
-        mpesaPhone: '',
-      });
-      fetchCurrentInpatients();
-    } catch (error) {
-      console.error('Failed to discharge patient:', error);
-      toast.error('❌ Failed to discharge patient');
+    if (!dischargeForm.totalCharges || dischargeForm.totalCharges <= 0) {
+      toast.error('Please enter the total ward charges amount');
+      return;
     }
+    if (dischargeForm.paymentMethod === 'MPESA' && !dischargeForm.mpesaPhone) {
+      toast.error('Please enter M-Pesa phone number');
+      return;
+    }
+
+    setIsProcessingDischarge(true);
+    try {
+      // Step 1: Create the ward discharge invoice
+      const invoiceRes = await apiClient.post(
+        `/admissions/${selectedPatient.visit.id}/discharge-invoice`,
+        { amount: dischargeForm.totalCharges },
+      );
+      const invoiceId = invoiceRes.data.id;
+
+      // Step 2: Process payment (payments service auto-discharges on success)
+      if (dischargeForm.paymentMethod === 'CASH') {
+        await apiClient.post('/payments', {
+          invoiceId,
+          method: 'CASH',
+          amount: dischargeForm.totalCharges,
+        });
+        toast.success('✅ Payment received. Patient discharged successfully!');
+        setShowDischargeModal(false);
+        setSelectedPatient(null);
+        setDischargeForm({ dischargeSummary: '', totalCharges: 0, paymentMethod: 'CASH', mpesaPhone: '' });
+        fetchCurrentInpatients();
+      } else {
+        const payRes = await apiClient.post('/payments', {
+          invoiceId,
+          method: 'MPESA',
+          amount: dischargeForm.totalCharges,
+          phoneNumber: dischargeForm.mpesaPhone,
+        });
+        toast.success('📱 STK push sent! Waiting for patient payment...');
+        setShowDischargeModal(false);
+        pollDischargePayment(payRes.data.checkoutRequestId);
+      }
+    } catch (error: any) {
+      const msg = error?.response?.data?.message || error?.message || 'Failed to process payment';
+      toast.error(`❌ ${msg}`);
+    } finally {
+      setIsProcessingDischarge(false);
+    }
+  };
+
+  const pollDischargePayment = (checkoutId: string) => {
+    let attempts = 0;
+    const interval = setInterval(async () => {
+      attempts++;
+      try {
+        const res = await apiClient.get(`/payments/mpesa/query/${checkoutId}`);
+        const status = res.data?.payment?.status || res.data?.status;
+        if (status === 'SUCCESS' || res.data?.status === 'paid') {
+          clearInterval(interval);
+          toast.success('✅ M-Pesa payment confirmed! Patient discharged.');
+          setSelectedPatient(null);
+          setDischargeForm({ dischargeSummary: '', totalCharges: 0, paymentMethod: 'CASH', mpesaPhone: '' });
+          fetchCurrentInpatients();
+        } else if (status === 'FAILED') {
+          clearInterval(interval);
+          toast.error('❌ M-Pesa payment failed. Please retry.');
+        }
+      } catch {}
+      if (attempts >= 20) {
+        clearInterval(interval);
+        toast.error('⏰ Payment timeout. Verify payment status.');
+      }
+    }, 3000);
   };
 
   const calculateAge = (dob: string) => {
@@ -374,169 +505,220 @@ export default function WardClerkPage() {
         {/* Patient Details & Actions */}
         {selectedPatient && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Patient Record Timeline */}
+            {/* Patient Record Timeline — real data */}
             <div className="lg:col-span-2">
-              <Card title={`Patient Record Timeline: ${selectedPatient.visit.patient.name}`}>
+              <Card title={`Patient Record: ${selectedPatient.visit.patient.name}`}>
                 <div className="space-y-4">
-                  {/* Timeline Item */}
+                  {/* Admission */}
                   <div className="flex gap-4">
                     <div className="flex flex-col items-center">
-                      <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
-                        <span className="text-white text-sm">📅</span>
-                      </div>
-                      <div className="w-0.5 h-full bg-gray-300 mt-2"></div>
+                      <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white text-sm">📅</div>
+                      <div className="w-0.5 flex-1 bg-gray-200 mt-1"></div>
                     </div>
                     <div className="flex-1 pb-4">
-                      <p className="text-sm text-gray-600">{formatDate(selectedPatient.admittedAt)}</p>
-                      <p className="font-semibold text-gray-900">Admission Date</p>
-                      <p className="text-sm text-gray-600">• Admitted</p>
+                      <p className="text-xs text-gray-500">{formatDate(selectedPatient.admittedAt)}</p>
+                      <p className="font-semibold text-gray-900">Admitted</p>
+                      <p className="text-sm text-gray-600">Ward: <strong>{selectedPatient.wardName}</strong> • Bed: <strong>{selectedPatient.bedNumber}</strong></p>
                     </div>
                   </div>
 
+                  {/* Consultations (real) */}
                   <div className="flex gap-4">
                     <div className="flex flex-col items-center">
-                      <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center">
-                        <span className="text-white text-sm">📋</span>
-                      </div>
-                      <div className="w-0.5 h-full bg-gray-300 mt-2"></div>
+                      <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center text-white text-sm">🩺</div>
+                      <div className="w-0.5 flex-1 bg-gray-200 mt-1"></div>
                     </div>
                     <div className="flex-1 pb-4">
-                      <p className="text-sm text-gray-600">{formatDate(selectedPatient.admittedAt)}</p>
-                      <p className="font-semibold text-gray-900">Visit History</p>
-                      <p className="text-sm text-gray-600">• Initial assessment</p>
-                      <p className="text-sm text-gray-600">• Specialist consultation</p>
+                      <p className="font-semibold text-gray-900 mb-1">Doctor Consultation</p>
+                      {(!selectedPatient.visit.consultations || selectedPatient.visit.consultations.length === 0) ? (
+                        <p className="text-sm text-gray-400 italic">No consultation notes recorded</p>
+                      ) : (
+                        selectedPatient.visit.consultations.map((c) => (
+                          <div key={c.id} className="mb-2 p-2 bg-green-50 rounded-lg border border-green-100">
+                            <p className="text-xs text-gray-500">{formatDate(c.createdAt)} — {c.doctor?.name || 'Doctor'}</p>
+                            {c.diagnosis && <p className="text-sm font-medium text-gray-900">Diagnosis: {c.diagnosis}</p>}
+                            {c.notes && <p className="text-sm text-gray-700 mt-1">Notes: {c.notes}</p>}
+                          </div>
+                        ))
+                      )}
                     </div>
                   </div>
 
+                  {/* Prescriptions (real) */}
                   <div className="flex gap-4">
                     <div className="flex flex-col items-center">
-                      <div className="w-8 h-8 bg-purple-500 rounded-full flex items-center justify-center">
-                        <span className="text-white text-sm">💊</span>
-                      </div>
-                      <div className="w-0.5 h-full bg-gray-300 mt-2"></div>
+                      <div className="w-8 h-8 bg-purple-500 rounded-full flex items-center justify-center text-white text-sm">💊</div>
+                      <div className="w-0.5 flex-1 bg-gray-200 mt-1"></div>
                     </div>
                     <div className="flex-1 pb-4">
-                      <p className="text-sm text-gray-600">{formatDate(selectedPatient.admittedAt)}</p>
-                      <p className="font-semibold text-gray-900">Treatment Plan</p>
-                      <p className="text-sm text-gray-600">• Physical therapy</p>
-                      <p className="text-sm text-gray-600">• Medication</p>
+                      <p className="font-semibold text-gray-900 mb-1">Prescriptions</p>
+                      {(!selectedPatient.visit.prescriptions || selectedPatient.visit.prescriptions.length === 0) ? (
+                        <p className="text-sm text-gray-400 italic">No prescriptions</p>
+                      ) : (
+                        selectedPatient.visit.prescriptions.map((rx) => (
+                          <div key={rx.id} className="mb-2 p-2 bg-purple-50 rounded-lg border border-purple-100">
+                            <p className="text-xs text-gray-500">{formatDate(rx.createdAt)} — {rx.doctor?.name || 'Doctor'} • <Badge variant={rx.status === 'DISPENSED' ? 'success' : 'warning'}>{rx.status}</Badge></p>
+                            {(rx.items || (rx.itemsJson ? JSON.parse(rx.itemsJson) : [])).map((item: any, i: number) => (
+                              <p key={i} className="text-sm text-gray-700">• {item.medicine || item.name} {item.dosage} {item.quantity ? `× ${item.quantity}` : ''}</p>
+                            ))}
+                          </div>
+                        ))
+                      )}
                     </div>
                   </div>
 
+                  {/* Lab Results (real) */}
                   <div className="flex gap-4">
                     <div className="flex flex-col items-center">
-                      <div className="w-8 h-8 bg-yellow-500 rounded-full flex items-center justify-center">
-                        <span className="text-white text-sm">🔬</span>
-                      </div>
-                      <div className="w-0.5 h-full bg-gray-300 mt-2"></div>
-                    </div>
-                    <div className="flex-1 pb-4">
-                      <p className="text-sm text-gray-600">{formatDate(selectedPatient.admittedAt)}</p>
-                      <p className="font-semibold text-gray-900">Medications</p>
-                      <p className="text-sm text-gray-600">• Amoxicillin 500mg</p>
-                      <p className="text-sm text-gray-600">• Ibuprofen 400mg</p>
-                    </div>
-                  </div>
-
-                  <div className="flex gap-4">
-                    <div className="flex flex-col items-center">
-                      <div className="w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center">
-                        <span className="text-white text-sm">📊</span>
-                      </div>
+                      <div className="w-8 h-8 bg-yellow-500 rounded-full flex items-center justify-center text-white text-sm">🔬</div>
                     </div>
                     <div className="flex-1">
-                      <p className="text-sm text-gray-600">{formatDate(selectedPatient.admittedAt)}</p>
-                      <p className="font-semibold text-gray-900">Lab Results</p>
-                      <p className="text-sm text-gray-600">• Blood Test: Normal</p>
-                      <p className="text-sm text-gray-600">• X-Ray: Fracture detected</p>
+                      <p className="font-semibold text-gray-900 mb-1">Lab Results</p>
+                      {(!selectedPatient.visit.labOrders || selectedPatient.visit.labOrders.length === 0) ? (
+                        <p className="text-sm text-gray-400 italic">No lab orders</p>
+                      ) : (
+                        selectedPatient.visit.labOrders.map((order: any) => (
+                          <div key={order.id} className="mb-2 p-2 bg-yellow-50 rounded-lg border border-yellow-100">
+                            <p className="text-xs text-gray-500">Tests: {(typeof order.testsJson === 'string' ? JSON.parse(order.testsJson) : order.testsJson || []).join(', ')} • <Badge variant={order.status === 'COMPLETED' ? 'success' : 'info'}>{order.status}</Badge></p>
+                            {(order.labResults || []).flatMap((res: any, i: number) => {
+                              const items: any[] = typeof res.resultsJson === 'string' ? JSON.parse(res.resultsJson) : (res.resultsJson || []);
+                              return items.map((item: any, j: number) => (
+                                <p key={`${i}-${j}`} className="text-sm text-gray-700">• {item.testName}: <strong>{item.value}{item.unit ? ` ${item.unit}` : ''}</strong>{item.referenceRange ? ` (Ref: ${item.referenceRange})` : ''}</p>
+                              ));
+                            })}
+                          </div>
+                        ))
+                      )}
                     </div>
                   </div>
                 </div>
               </Card>
             </div>
 
-            {/* Charges & Discharge */}
-            <div className="space-y-6">
-              {/* Charges Overview */}
-              <Card title="Charges Overview">
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 bg-blue-500 rounded-full flex items-center justify-center">
-                      <span className="text-white font-medium">
-                        {selectedPatient.visit.patient.name.charAt(0)}
-                      </span>
+            {/* Billing & Discharge */}
+            <div className="space-y-4">
+              <Card title="Ward Billing">
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3 pb-3 border-b border-gray-100">
+                    <div className="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center text-white font-bold">
+                      {selectedPatient.visit.patient.name.charAt(0)}
                     </div>
                     <div>
-                      <p className="font-semibold text-gray-900">
-                        {selectedPatient.visit.patient.name}
-                      </p>
-                      <p className="text-sm text-gray-600">{selectedPatient.visit.patient.phone}</p>
+                      <p className="font-semibold text-gray-900">{selectedPatient.visit.patient.name}</p>
+                      <p className="text-xs text-gray-500">{selectedPatient.visit.patient.phone}</p>
                     </div>
                   </div>
 
-                  <div className="space-y-2 pt-4 border-t border-gray-200">
-                    <div className="flex justify-between">
-                      <span className="text-sm text-gray-600">Daily Charges</span>
-                      <span className="font-semibold text-gray-900">KES 500</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm text-gray-600">Total Charges</span>
-                      <span className="font-semibold text-gray-900">KES 2,500</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm text-gray-600">Payment Status</span>
-                      <Badge variant="warning">Partially Paid</Badge>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2 pt-4">
-                    <Button className="w-full" onClick={() => setShowDischargeModal(true)}>
-                      Request Payment
-                    </Button>
-                    <Button className="w-full" variant="secondary">
-                      View Details
-                    </Button>
-                  </div>
-                </div>
-              </Card>
-
-              {/* Discharge Summary */}
-              <Card title="Discharge Summary">
-                <div className="space-y-4">
                   <div>
-                    <p className="text-sm font-semibold text-gray-900 mb-2">Bill Summary</p>
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Total Charges:</span>
-                        <span className="font-semibold">KES 2,500</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Payments:</span>
-                        <span className="font-semibold">KES 1,000</span>
-                      </div>
-                      <div className="flex justify-between text-sm border-t border-gray-200 pt-1">
-                        <span className="text-gray-900 font-semibold">Outstanding:</span>
-                        <span className="font-bold text-red-600">KES 1,500</span>
-                      </div>
-                    </div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Daily Rate (KES)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={billingForm.dailyRate || ''}
+                      onChange={(e) => setBillingForm({ ...billingForm, dailyRate: Number(e.target.value) })}
+                      placeholder="e.g. 2000"
+                      className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Number of Days</label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={billingForm.days}
+                      onChange={(e) => setBillingForm({ ...billingForm, days: Math.max(1, Number(e.target.value)) })}
+                      className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
                   </div>
 
-                  <div className="space-y-2">
+                  {computedTotal > 0 && (
+                    <div className="p-3 bg-gray-50 rounded-lg border border-gray-200 space-y-1">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600">Total ({billingForm.days}d × KES {billingForm.dailyRate.toLocaleString()})</span>
+                        <span className="font-semibold">KES {computedTotal.toLocaleString()}</span>
+                      </div>
+                      {insurancePays > 0 && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-green-700">Insurance pays (50%)</span>
+                          <span className="font-semibold text-green-700">- KES {insurancePays.toLocaleString()}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between text-sm border-t border-gray-300 pt-1">
+                        <span className="font-semibold text-gray-900">Patient pays</span>
+                        <span className="font-bold text-blue-700">KES {patientOwes.toLocaleString()}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Insurance */}
+                  <div>
+                    <label className="flex items-center gap-2 text-sm font-medium text-gray-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={billingForm.hasInsurance}
+                        onChange={(e) => setBillingForm({ ...billingForm, hasInsurance: e.target.checked, insuranceProvider: '', insuranceMemberNo: '' })}
+                        className="rounded"
+                      />
+                      Patient has insurance
+                    </label>
+                  </div>
+
+                  {billingForm.hasInsurance && (
+                    <div className="space-y-2 p-3 bg-blue-50 rounded-lg border border-blue-100">
+                      {computedTotal < INSURANCE_THRESHOLD && (
+                        <p className="text-xs text-orange-600">⚠️ Insurance only applies for bills of KES {INSURANCE_THRESHOLD.toLocaleString()} or more</p>
+                      )}
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Insurance Provider</label>
+                        <select
+                          value={billingForm.insuranceProvider}
+                          onChange={(e) => setBillingForm({ ...billingForm, insuranceProvider: e.target.value })}
+                          className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="">Select provider...</option>
+                          {INSURANCE_PROVIDERS.map((p) => (
+                            <option key={p} value={p}>{p}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Member / Policy No.</label>
+                        <input
+                          type="text"
+                          value={billingForm.insuranceMemberNo}
+                          onChange={(e) => setBillingForm({ ...billingForm, insuranceMemberNo: e.target.value })}
+                          placeholder="e.g. SHA-123456"
+                          className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-2 pt-2">
                     <Button
-                      variant="primary"
                       className="w-full"
-                      onClick={() => setShowDischargeModal(true)}
+                      disabled={patientOwes <= 0}
+                      onClick={() => {
+                        if (patientOwes <= 0) { toast.error('Please enter daily rate and days'); return; }
+                        setDischargeForm((prev) => ({
+                          ...prev,
+                          totalCharges: patientOwes,
+                          mpesaPhone: '',
+                        }));
+                        setShowDischargeModal(true);
+                      }}
                     >
-                      📱 Request Payment (M-Pesa)
+                      💳 Collect Payment &amp; Discharge
                     </Button>
-                    <Button variant="secondary" className="w-full">
-                      💵 Cash Paid
-                    </Button>
-                    <Button variant="secondary" className="w-full">
-                      ✅ Confirm Payment
-                    </Button>
-                    <Button variant="danger" className="w-full">
-                      🚪 Discharge Patient
+                    <Button
+                      className="w-full"
+                      variant="secondary"
+                      onClick={() => {
+                        fetchVisitDetails(selectedPatient);
+                        setShowViewModal(true);
+                      }}
+                    >
+                      🔍 View Full Details
                     </Button>
                   </div>
                 </div>
@@ -619,109 +801,188 @@ export default function WardClerkPage() {
       {showDischargeModal && selectedPatient && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h2 className="text-xl font-bold text-gray-900 mb-4">Discharge Patient</h2>
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Collect Payment &amp; Discharge</h2>
 
             <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg mb-4">
-              <p className="text-sm text-blue-700">Patient</p>
-              <p className="font-semibold text-blue-900">{selectedPatient.visit.patient.name}</p>
-              <p className="text-sm text-blue-700 mt-2">
-                Ward: {selectedPatient.wardName} • Bed: {selectedPatient.bedNumber}
-              </p>
+              <p className="text-sm text-blue-700 font-medium">{selectedPatient.visit.patient.name}</p>
+              <p className="text-xs text-blue-600">{selectedPatient.wardName} • Bed {selectedPatient.bedNumber}</p>
+              {billingForm.hasInsurance && billingForm.insuranceProvider && (
+                <p className="text-xs text-green-700 mt-1">🏥 Insurance: {billingForm.insuranceProvider} {billingForm.insuranceMemberNo && `(${billingForm.insuranceMemberNo})`}</p>
+              )}
+            </div>
+
+            <div className="p-3 bg-gray-50 border rounded-lg mb-4 space-y-1">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-600">Ward Total</span>
+                <span>KES {computedTotal.toLocaleString()}</span>
+              </div>
+              {insurancePays > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-green-700">Insurance covers (50%)</span>
+                  <span className="text-green-700">- KES {insurancePays.toLocaleString()}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-sm border-t pt-1 font-bold">
+                <span>Patient pays</span>
+                <span className="text-blue-700">KES {patientOwes.toLocaleString()}</span>
+              </div>
             </div>
 
             <form onSubmit={handleDischargePatient} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Discharge Summary
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Discharge Summary (optional)</label>
                 <textarea
-                  rows={3}
+                  rows={2}
                   value={dischargeForm.dischargeSummary}
-                  onChange={(e) =>
-                    setDischargeForm({ ...dischargeForm, dischargeSummary: e.target.value })
-                  }
-                  placeholder="Brief discharge summary..."
+                  onChange={(e) => setDischargeForm({ ...dischargeForm, dischargeSummary: e.target.value })}
+                  placeholder="Brief discharge notes..."
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Total Charges (KES)
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount to Collect (KES)</label>
                 <input
                   type="number"
+                  min="1"
                   value={dischargeForm.totalCharges}
-                  onChange={(e) =>
-                    setDischargeForm({ ...dischargeForm, totalCharges: Number(e.target.value) })
-                  }
+                  onChange={(e) => setDischargeForm({ ...dischargeForm, totalCharges: Number(e.target.value) })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
+                <p className="text-xs text-gray-500 mt-1">Pre-filled from billing. Edit if needed.</p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Payment Method
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Payment Method</label>
                 <div className="flex gap-2">
-                  <Button
-                    type="button"
-                    variant={dischargeForm.paymentMethod === 'CASH' ? 'primary' : 'secondary'}
-                    onClick={() => setDischargeForm({ ...dischargeForm, paymentMethod: 'CASH' })}
-                    className="flex-1"
-                  >
+                  <button type="button" onClick={() => setDischargeForm({ ...dischargeForm, paymentMethod: 'CASH' })}
+                    className={`flex-1 py-3 rounded-lg border-2 font-semibold transition-colors ${dischargeForm.paymentMethod === 'CASH' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-600 hover:border-gray-400'}`}>
                     💵 Cash
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={dischargeForm.paymentMethod === 'MPESA' ? 'success' : 'secondary'}
-                    onClick={() => setDischargeForm({ ...dischargeForm, paymentMethod: 'MPESA' })}
-                    className="flex-1"
-                  >
+                  </button>
+                  <button type="button" onClick={() => setDischargeForm({ ...dischargeForm, paymentMethod: 'MPESA' })}
+                    className={`flex-1 py-3 rounded-lg border-2 font-semibold transition-colors ${dischargeForm.paymentMethod === 'MPESA' ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-200 text-gray-600 hover:border-gray-400'}`}>
                     📱 M-Pesa
-                  </Button>
+                  </button>
                 </div>
               </div>
 
               {dischargeForm.paymentMethod === 'MPESA' && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    M-Pesa Phone Number
-                  </label>
-                  <input
-                    type="tel"
-                    value={dischargeForm.mpesaPhone}
-                    onChange={(e) =>
-                      setDischargeForm({ ...dischargeForm, mpesaPhone: e.target.value })
-                    }
-                    placeholder="254712345678"
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Payer's M-Pesa Number</label>
+                  <p className="text-xs text-gray-500 mb-1">Enter the number that will receive the STK push (can differ from patient's registered number)</p>
+                  <input type="tel" value={dischargeForm.mpesaPhone}
+                    onChange={(e) => setDischargeForm({ ...dischargeForm, mpesaPhone: e.target.value })}
+                    placeholder="e.g. 254712345678"
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
               )}
 
-              <div className="flex gap-2 pt-4">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => {
-                    setShowDischargeModal(false);
-                    setDischargeForm({
-                      dischargeSummary: '',
-                      totalCharges: 0,
-                      paymentMethod: 'CASH',
-                      mpesaPhone: '',
-                    });
-                  }}
-                  className="flex-1"
-                >
-                  Cancel
-                </Button>
-                <Button type="submit" variant="danger" className="flex-1">
-                  ✅ Discharge (Testing: No Payment)
+              <div className="flex gap-2 pt-2">
+                <Button type="button" variant="secondary" onClick={() => { setShowDischargeModal(false); setDischargeForm({ dischargeSummary: '', totalCharges: patientOwes, paymentMethod: 'CASH', mpesaPhone: '' }); }} className="flex-1">Cancel</Button>
+                <Button type="submit" variant="danger" className="flex-1" disabled={isProcessingDischarge}>
+                  {isProcessingDischarge ? 'Processing...' : dischargeForm.paymentMethod === 'CASH' ? '✅ Pay Cash & Discharge' : '📱 Send M-Pesa & Discharge'}
                 </Button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* View Details Modal */}
+      {showViewModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold text-gray-900">
+                  Patient Details: {(viewingAdmission || selectedPatient)?.visit.patient.name}
+                </h2>
+                <button onClick={() => { setShowViewModal(false); setViewingAdmission(null); }} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+              </div>
+
+              {loadingDetails ? (
+                <div className="text-center py-12">
+                  <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto"></div>
+                  <p className="mt-3 text-gray-500">Loading patient records...</p>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {/* Patient Info */}
+                  <div className="p-4 bg-blue-50 rounded-lg">
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div><span className="text-gray-500">Phone:</span> <strong>{(viewingAdmission || selectedPatient)?.visit.patient.phone}</strong></div>
+                      <div><span className="text-gray-500">Ward:</span> <strong>{(viewingAdmission || selectedPatient)?.wardName}</strong></div>
+                      <div><span className="text-gray-500">Bed:</span> <strong>{(viewingAdmission || selectedPatient)?.bedNumber}</strong></div>
+                      <div><span className="text-gray-500">Admitted:</span> <strong>{formatDate((viewingAdmission || selectedPatient)?.admittedAt || '')}</strong></div>
+                    </div>
+                  </div>
+
+                  {/* Doctor Notes & Diagnosis */}
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-2">🩺 Doctor Notes &amp; Diagnosis</h3>
+                    {(!viewingAdmission?.visit.consultations || viewingAdmission.visit.consultations.length === 0) ? (
+                      <p className="text-sm text-gray-400 italic">No consultation records</p>
+                    ) : (
+                      viewingAdmission.visit.consultations.map((c) => (
+                        <div key={c.id} className="mb-3 p-3 bg-green-50 border border-green-200 rounded-lg">
+                          <p className="text-xs text-gray-500 mb-1">{formatDate(c.createdAt)} • {c.doctor?.name}</p>
+                          <p className="text-sm font-semibold text-gray-900">Diagnosis: {c.diagnosis || '—'}</p>
+                          <p className="text-sm text-gray-700 mt-1">{c.notes || '—'}</p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {/* Prescriptions */}
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-2">💊 Prescriptions</h3>
+                    {(!viewingAdmission?.visit.prescriptions || viewingAdmission.visit.prescriptions.length === 0) ? (
+                      <p className="text-sm text-gray-400 italic">No prescriptions</p>
+                    ) : (
+                      viewingAdmission.visit.prescriptions.map((rx) => (
+                        <div key={rx.id} className="mb-3 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                          <div className="flex justify-between items-center mb-1">
+                            <p className="text-xs text-gray-500">{formatDate(rx.createdAt)} • {rx.doctor?.name}</p>
+                            <Badge variant={rx.status === 'DISPENSED' ? 'success' : 'warning'}>{rx.status}</Badge>
+                          </div>
+                          {(rx.items || (rx.itemsJson ? JSON.parse(rx.itemsJson) : [])).map((item: any, i: number) => (
+                            <p key={i} className="text-sm text-gray-700">• {item.medicine || item.name} — {item.dosage}{item.quantity ? ` × ${item.quantity}` : ''}</p>
+                          ))}
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {/* Lab Results */}
+                  <div>
+                    <h3 className="font-semibold text-gray-900 mb-2">🔬 Lab Orders &amp; Results</h3>
+                    {(!viewingAdmission?.visit.labOrders || viewingAdmission.visit.labOrders.length === 0) ? (
+                      <p className="text-sm text-gray-400 italic">No lab orders</p>
+                    ) : (
+                      viewingAdmission.visit.labOrders.map((order: any) => (
+                        <div key={order.id} className="mb-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                          <div className="flex justify-between items-center mb-1">
+                            <p className="text-xs text-gray-500">Tests: {(typeof order.testsJson === 'string' ? JSON.parse(order.testsJson) : order.testsJson || []).join(', ')}</p>
+                            <Badge variant={order.status === 'COMPLETED' ? 'success' : 'info'}>{order.status}</Badge>
+                          </div>
+                          {(order.labResults || []).length === 0 ? (
+                            <p className="text-sm text-gray-400 italic">Results pending</p>
+                          ) : (
+                            (order.labResults || []).flatMap((res: any, i: number) => {
+                              const items: any[] = typeof res.resultsJson === 'string' ? JSON.parse(res.resultsJson) : (res.resultsJson || []);
+                              return items.map((item: any, j: number) => (
+                                <p key={`${i}-${j}`} className="text-sm text-gray-700">• {item.testName}: <strong>{item.value}{item.unit ? ` ${item.unit}` : ''}</strong>{item.referenceRange ? ` (Ref: ${item.referenceRange})` : ''}</p>
+                              ));
+                            })
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
