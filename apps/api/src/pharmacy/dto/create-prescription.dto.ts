@@ -5,7 +5,6 @@ export interface PrescriptionItem {
   medicine: string;
   dosage: string;
   quantity: number;
-  price: number;
 }
 
 export class CreatePrescriptionDto {

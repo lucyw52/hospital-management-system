@@ -38,11 +38,17 @@ export class PaymentsService {
         throw new BadRequestException('Phone number is required for M-Pesa payment');
       }
 
-      const stkResponse = await this.mpesaService.initiateSTKPush(
+      const stkResult = await this.mpesaService.initiateSTKPush(
         createPaymentDto.phoneNumber,
         createPaymentDto.amount,
         invoice.id,
       );
+
+      if (!stkResult.success) {
+        throw new BadRequestException(
+          stkResult.error ?? 'Failed to initiate M-Pesa payment',
+        );
+      }
 
       // Create payment record
       const payment = await this.prisma.payment.create({
@@ -51,13 +57,14 @@ export class PaymentsService {
           method: PaymentMethod.MPESA,
           amount: createPaymentDto.amount,
           status: 'PENDING',
-          mpesaCheckoutRequestId: stkResponse.CheckoutRequestID,
+          mpesaCheckoutRequestId: stkResult.checkoutRequestId,
         },
       });
 
       return {
         payment,
-        stkResponse,
+        checkoutRequestId: stkResult.checkoutRequestId,
+        merchantRequestId: stkResult.merchantRequestId,
         message: 'M-Pesa STK push sent. Please check your phone.',
       };
     } else if (createPaymentDto.method === PaymentMethod.CASH) {
@@ -165,15 +172,10 @@ export class PaymentsService {
     const visit = invoice.visit;
 
     if (invoice.type === InvoiceType.CONSULTATION) {
-      // Move from RECEPTION to DOCTOR queue
+      // RECEPTION paid → close reception queue, open doctor queue
       await this.prisma.queueItem.updateMany({
-        where: {
-          visitId: visit.id,
-          stage: QueueStage.RECEPTION,
-        },
-        data: {
-          status: 'DONE',
-        },
+        where: { visitId: visit.id, stage: QueueStage.RECEPTION },
+        data: { status: 'DONE' },
       });
 
       await this.prisma.queueItem.create({
@@ -181,51 +183,42 @@ export class PaymentsService {
           visitId: visit.id,
           stage: QueueStage.DOCTOR,
           status: 'WAITING',
-          notes: 'Consultation payment received',
+          notes: 'Consultation fee paid — awaiting doctor',
         },
       });
     } else if (invoice.type === InvoiceType.PHARMACY) {
-      // Mark prescription as dispensed
+      // PHARMACY paid → dispense all pending prescriptions for this visit
       await this.prisma.prescription.updateMany({
         where: { visitId: visit.id, status: 'PENDING' },
         data: { status: 'DISPENSED' },
       });
 
-      // Close pharmacy queue item
+      // Close the pharmacy queue item that was waiting for this payment
       await this.prisma.queueItem.updateMany({
-        where: {
-          visitId: visit.id,
-          stage: QueueStage.PHARMACY,
-        },
-        data: {
-          status: 'DONE',
-        },
+        where: { visitId: visit.id, stage: QueueStage.PHARMACY, status: { in: ['WAITING', 'IN_PROGRESS'] } },
+        data: { status: 'DONE' },
       });
     } else if (invoice.type === InvoiceType.WARD) {
-      // Mark admission as discharged
+      // WARD paid → discharge the patient, close ward queue, complete visit
       await this.prisma.admission.updateMany({
         where: { visitId: visit.id, status: 'ADMITTED' },
-        data: {
-          status: 'DISCHARGED',
-          dischargedAt: new Date(),
-        },
+        data: { status: 'DISCHARGED', dischargedAt: new Date() },
       });
 
-      // Close ward queue item
       await this.prisma.queueItem.updateMany({
-        where: {
-          visitId: visit.id,
-          stage: QueueStage.WARD,
-        },
-        data: {
-          status: 'DONE',
-        },
+        where: { visitId: visit.id, stage: QueueStage.WARD },
+        data: { status: 'DONE' },
       });
 
-      // Close visit
       await this.prisma.visit.update({
         where: { id: visit.id },
         data: { status: 'COMPLETED' },
+      });
+    } else if (invoice.type === InvoiceType.LAB) {
+      // LAB paid → close the lab queue item so the tech can proceed
+      await this.prisma.queueItem.updateMany({
+        where: { visitId: visit.id, stage: QueueStage.LAB, status: { in: ['WAITING', 'IN_PROGRESS'] } },
+        data: { status: 'DONE' },
       });
     }
   }
@@ -246,7 +239,36 @@ export class PaymentsService {
       throw new NotFoundException('Payment not found');
     }
 
-    const status = await this.mpesaService.querySTKStatus(checkoutRequestId);
-    return { payment, mpesaStatus: status };
+    const queryResult = await this.mpesaService.querySTKStatus(checkoutRequestId);
+
+    // Sync local payment status with Daraja result where possible
+    if (payment.status === 'PENDING') {
+      if (queryResult.status === 'paid') {
+        await this.prisma.payment.update({
+          where: { id: payment.id },
+          data: { status: 'SUCCESS' },
+        });
+        await this.prisma.invoice.update({
+          where: { id: payment.invoiceId },
+          data: { status: 'PAID' },
+        });
+      } else if (
+        queryResult.status === 'failed' ||
+        queryResult.status === 'cancelled'
+      ) {
+        await this.prisma.payment.update({
+          where: { id: payment.id },
+          data: { status: 'FAILED' },
+        });
+      }
+    }
+
+    return {
+      payment,
+      status: queryResult.status,
+      resultCode: queryResult.resultCode,
+      resultDesc: queryResult.resultDesc,
+      error: queryResult.error,
+    };
   }
 }

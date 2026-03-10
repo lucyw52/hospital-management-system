@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PharmacyService } from './pharmacy.service';
 import { CreatePrescriptionDto } from './dto/create-prescription.dto';
+import { CreateStockDto, UpdateStockDto } from './dto/stock.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -51,7 +52,7 @@ export class PharmacyController {
   }
 
   @Get('stock')
-  @Roles(UserRole.PHARMACIST, UserRole.ADMIN)
+  @Roles(UserRole.PHARMACIST, UserRole.ADMIN, UserRole.DOCTOR)
   @ApiOperation({ summary: 'Get medicine stock' })
   getMedicineStock() {
     return this.pharmacyService.getMedicineStock();
@@ -60,14 +61,14 @@ export class PharmacyController {
   @Patch('stock/:id')
   @Roles(UserRole.PHARMACIST, UserRole.ADMIN)
   @ApiOperation({ summary: 'Update medicine stock' })
-  updateStock(@Param('id') id: string, @Body('quantity') quantity: number) {
-    return this.pharmacyService.updateStock(id, quantity);
+  updateStock(@Param('id') id: string, @Body() dto: UpdateStockDto) {
+    return this.pharmacyService.updateStock(id, dto.quantity);
   }
 
   @Post('stock')
   @Roles(UserRole.PHARMACIST, UserRole.ADMIN)
   @ApiOperation({ summary: 'Add new medicine' })
-  addMedicine(@Body() data: any) {
-    return this.pharmacyService.addMedicine(data);
+  addMedicine(@Body() dto: CreateStockDto) {
+    return this.pharmacyService.addMedicine(dto);
   }
 }

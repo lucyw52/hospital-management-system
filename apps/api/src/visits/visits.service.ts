@@ -25,34 +25,47 @@ export class VisitsService {
       },
     });
 
-    // Get patient email if available (you may need to add email field to Patient model)
+    // Get patient email if available
     const patientEmail = (visit.patient as any).email || `patient${visit.patient.id}@example.com`;
 
-    // TESTING MODE: Payments disabled - Queue all patients directly to doctor
-    // For INJECTION_FOLLOWUP visits, they never needed payment anyway
-    // For CONSULTATION visits, payment is disabled for testing
-    
-    const queueNote = createVisitDto.visitType === VisitType.INJECTION_FOLLOWUP
-      ? 'Follow-up injection visit - no payment required'
-      : 'Consultation visit - payment disabled for testing';
-    
+    // INJECTION_FOLLOWUP visits are free — go straight to DOCTOR queue.
+    // CONSULTATION and REVIEW visits require the consultation fee to be paid
+    // at reception first; the patient enters the RECEPTION queue and the
+    // receptionist creates a CONSULTATION invoice.  Once that invoice is
+    // paid, payments.service moves them to the DOCTOR queue automatically.
+    const isFollowUp = createVisitDto.visitType === VisitType.INJECTION_FOLLOWUP;
+
     const queueItem = await this.prisma.queueItem.create({
       data: {
         visitId: visit.id,
-        stage: QueueStage.DOCTOR,
+        stage: isFollowUp ? QueueStage.DOCTOR : QueueStage.RECEPTION,
         status: 'WAITING',
-        notes: queueNote,
-        priority: createVisitDto.visitType === VisitType.INJECTION_FOLLOWUP ? 50 : 0, // Give slight priority to follow-ups
+        notes: isFollowUp
+          ? 'Injection follow-up — no consultation fee required'
+          : 'Awaiting consultation fee payment at reception',
+        priority: isFollowUp ? 50 : 0,
       },
     });
+
+    // Create consultation invoice for non-followup visits (KSh 100)
+    if (!isFollowUp) {
+      await this.prisma.invoice.create({
+        data: {
+          visitId: visit.id,
+          type: InvoiceType.CONSULTATION,
+          amount: 100,
+          status: 'PENDING',
+        },
+      });
+    }
 
     // Send queue notification email
     try {
       await this.emailService.sendQueueNotification(
         patientEmail,
         visit.patient.name,
-        1, // Queue number (you can calculate actual position)
-        'DOCTOR',
+        1,
+        isFollowUp ? 'DOCTOR' : 'RECEPTION',
       );
     } catch (error) {
       console.error('Failed to send queue notification:', error);

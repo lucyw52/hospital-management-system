@@ -72,6 +72,32 @@ export class AdmissionsService {
         visit: {
           include: {
             patient: true,
+            consultations: {
+              select: {
+                id: true,
+                notes: true,
+                diagnosis: true,
+                createdAt: true,
+                doctor: { select: { id: true, name: true } },
+              },
+              orderBy: { createdAt: 'desc' },
+            },
+            prescriptions: {
+              select: {
+                id: true,
+                status: true,
+                itemsJson: true,
+                createdAt: true,
+                doctor: { select: { id: true, name: true } },
+              },
+              orderBy: { createdAt: 'desc' },
+            },
+            labOrders: {
+              include: {
+                labResults: true,
+              },
+              orderBy: { createdAt: 'desc' },
+            },
             invoices: {
               where: {
                 type: InvoiceType.WARD,
@@ -128,14 +154,17 @@ export class AdmissionsService {
   }
 
   async discharge(id: string) {
-    // For production: Check if ward invoice is paid
-    // const admission = await this.findOne(id);
-    // const wardInvoice = admission.visit.invoices.find(inv => inv.type === 'WARD');
-    // if (wardInvoice && wardInvoice.status !== 'PAID') {
-    //   throw new Error('Ward payment must be completed before discharge');
-    // }
-    
-    // For testing: Allow discharge without payment check
+    // Enforce: WARD invoice must be fully paid before discharge
+    const current = await this.findOne(id);
+    const wardInvoice = current?.visit?.invoices?.find(
+      (inv: any) => inv.type === 'WARD',
+    );
+    if (wardInvoice && wardInvoice.status !== 'PAID') {
+      throw new Error(
+        'Ward charges must be paid in full before the patient can be discharged.',
+      );
+    }
+
     const admission = await this.prisma.admission.update({
       where: { id },
       data: {
