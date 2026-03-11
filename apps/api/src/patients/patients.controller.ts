@@ -41,6 +41,12 @@ export class PatientsController {
     return this.patientsService.findOne(id);
   }
 
+  @Get(':id/visits')
+  @ApiOperation({ summary: 'Get patient visit history' })
+  getPatientVisits(@Param('id') id: string) {
+    return this.patientsService.getPatientVisits(id);
+  }
+
   @Patch(':id')
   @Roles(UserRole.RECEPTIONIST, UserRole.ADMIN)
   @ApiOperation({ summary: 'Update patient' })

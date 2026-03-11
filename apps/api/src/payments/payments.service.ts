@@ -188,6 +188,43 @@ export class PaymentsService {
       });
     } else if (invoice.type === InvoiceType.PHARMACY) {
       // PHARMACY paid → dispense all pending prescriptions for this visit
+      const prescriptions = await this.prisma.prescription.findMany({
+        where: { visitId: visit.id, status: 'PENDING' },
+        select: { id: true, itemsJson: true },
+      });
+
+      // Deduct stock for each prescription
+      for (const prescription of prescriptions) {
+        const rawItems: Array<Record<string, any>> = JSON.parse(prescription.itemsJson ?? '[]');
+        await Promise.all(
+          rawItems.map(async (item) => {
+            const medicineName: string = item.medicine || item.name || '';
+            const qty = Number(item.quantity) || 0;
+            if (!medicineName || qty <= 0) return Promise.resolve();
+            
+            // Check stock availability before deducting
+            const stockItem = await this.prisma.medicineStock.findFirst({
+              where: { name: { equals: medicineName, mode: 'insensitive' } },
+            });
+            
+            if (stockItem) {
+              if (stockItem.quantity < qty) {
+                console.warn(`⚠️ Low stock warning: ${medicineName} - Requested: ${qty}, Available: ${stockItem.quantity}`);
+              }
+              // Deduct stock (Prisma decrement won't go below 0 automatically, but we log the warning)
+              return this.prisma.medicineStock.updateMany({
+                where: { name: { equals: medicineName, mode: 'insensitive' } },
+                data: { quantity: { decrement: qty } },
+              });
+            } else {
+              console.warn(`⚠️ Medicine not found in stock: ${medicineName}`);
+              return Promise.resolve();
+            }
+          }),
+        );
+      }
+
+      // Update prescription status to DISPENSED
       await this.prisma.prescription.updateMany({
         where: { visitId: visit.id, status: 'PENDING' },
         data: { status: 'DISPENSED' },
@@ -197,6 +234,12 @@ export class PaymentsService {
       await this.prisma.queueItem.updateMany({
         where: { visitId: visit.id, stage: QueueStage.PHARMACY, status: { in: ['WAITING', 'IN_PROGRESS'] } },
         data: { status: 'DONE' },
+      });
+
+      // Update visit status to COMPLETED
+      await this.prisma.visit.update({
+        where: { id: visit.id },
+        data: { status: 'COMPLETED' },
       });
     } else if (invoice.type === InvoiceType.WARD) {
       // WARD paid → discharge the patient, close ward queue, complete visit

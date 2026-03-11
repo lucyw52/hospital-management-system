@@ -112,4 +112,44 @@ export class PatientsService {
       },
     });
   }
+
+  async getPatientVisits(id: string) {
+    return this.prisma.visit.findMany({
+      where: { patientId: id },
+      include: {
+        consultations: {
+          include: {
+            doctor: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
+          },
+        },
+        labOrders: {
+          include: {
+            labResults: true,
+          },
+        },
+        prescriptions: {
+          include: {
+            doctor: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
+          },
+        },
+        invoices: {
+          include: {
+            payments: true,
+          },
+        },
+        admissions: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
 }

@@ -134,14 +134,28 @@ export class PharmacyService {
       // Handle both old format {name, frequency, duration} and new format {medicine, quantity}
       const rawItems: Array<Record<string, any>> = JSON.parse(prescription.itemsJson ?? '[]');
       await Promise.all(
-        rawItems.map((item) => {
+        rawItems.map(async (item) => {
           const medicineName: string = item.medicine || item.name || '';
           const qty = Number(item.quantity) || 0;
           if (!medicineName || qty <= 0) return Promise.resolve();
-          return this.prisma.medicineStock.updateMany({
+          
+          // Check stock availability before deducting
+          const stockItem = await this.prisma.medicineStock.findFirst({
             where: { name: { equals: medicineName, mode: 'insensitive' } },
-            data: { quantity: { decrement: qty } },
           });
+          
+          if (stockItem) {
+            if (stockItem.quantity < qty) {
+              console.warn(`⚠️ Low stock warning: ${medicineName} - Requested: ${qty}, Available: ${stockItem.quantity}`);
+            }
+            return this.prisma.medicineStock.updateMany({
+              where: { name: { equals: medicineName, mode: 'insensitive' } },
+              data: { quantity: { decrement: qty } },
+            });
+          } else {
+            console.warn(`⚠️ Medicine not found in stock: ${medicineName}`);
+            return Promise.resolve();
+          }
         }),
       );
 
