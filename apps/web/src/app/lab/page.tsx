@@ -149,7 +149,7 @@ export default function LabTechPage() {
 
   // Generate dynamic test category statistics from lab queue
   const getTestCategoryStats = () => {
-    const categories = {
+    const categories: Record<string, { tests: string[], counts: { pending: number, inProgress: number, done: number } }> = {
       'Blood Tests': { tests: ['CBC', 'Blood Count', 'Hemoglobin', 'Blood Sugar', 'Lipid Profile', 'Blood Culture'], counts: { pending: 0, inProgress: 0, done: 0 } },
       'Urine Tests': { tests: ['Urinalysis', 'Urine Culture', 'Urine Microscopy'], counts: { pending: 0, inProgress: 0, done: 0 } },
       'Imaging': { tests: ['X-Ray', 'CT Scan', 'Ultrasound', 'MRI'], counts: { pending: 0, inProgress: 0, done: 0 } },

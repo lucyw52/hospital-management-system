@@ -1,7 +1,7 @@
 'use client';
 
 import DashboardLayout from '@/components/Layout/DashboardLayout';
-import { Card } from '@/components/UI/Card';
+import PatientReportsView from '@/components/Patients/PatientReportsView';
 
 const navItems = [
   { label: 'Dashboard', href: '/pharmacist', icon: '💊' },
@@ -20,12 +20,7 @@ export default function PharmacyReportsPage() {
           <p className="text-gray-600 mt-1">Sales and inventory reports</p>
         </div>
 
-        <Card>
-          <div className="text-center py-12 text-gray-500">
-            <div className="text-6xl mb-4">📈</div>
-            <p>Reports and analytics coming soon</p>
-          </div>
-        </Card>
+        <PatientReportsView />
       </div>
     </DashboardLayout>
   );
